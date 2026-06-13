@@ -18,6 +18,7 @@ a {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -429,6 +430,98 @@ textarea {
   border-radius: 6px;
   overflow-wrap: anywhere;
   padding: 6px;
+}
+
+.form-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.form-panel label,
+.card label {
+  display: grid;
+  gap: 6px;
+}
+
+.form-panel input,
+.form-panel select,
+.form-panel textarea,
+.inline-form input,
+.inline-form select {
+  border: 1px solid #d8d0c3;
+  border-radius: 8px;
+  padding: 10px;
+  width: 100%;
+}
+
+.inline-form {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.file-button {
+  align-items: center;
+  border: 1px dashed #b83232;
+  border-radius: 8px;
+  color: #b83232;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 12px;
+}
+
+.file-button input {
+  display: none;
+}
+
+.menu-preview,
+.menu-thumb {
+  border-radius: 8px;
+  object-fit: cover;
+  width: 100%;
+}
+
+.menu-preview {
+  aspect-ratio: 4 / 3;
+}
+
+.menu-thumb {
+  aspect-ratio: 16 / 10;
+}
+
+.qr-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.qr-card {
+  background: #fffdf9;
+  border: 1px solid #ded6c9;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 16px;
+  text-align: center;
+}
+
+.qr-card code {
+  background: #f7f4ef;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  padding: 6px;
+  width: 100%;
 }
 
 @media (max-width: 720px) {

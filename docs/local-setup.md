@@ -30,6 +30,12 @@ docker compose version
 Copy-Item .env.example .env
 ```
 
+如果要让桌台二维码给手机扫码使用，把 `.env` 里的 `PUBLIC_WEB_BASE_URL` 改成本机局域网地址，例如：
+
+```txt
+PUBLIC_WEB_BASE_URL="http://192.168.1.20:3000"
+```
+
 安装依赖：
 
 ```powershell
@@ -119,6 +125,10 @@ http://本机局域网IP:3000/kitchen
 http://本机局域网IP:3000/service
 http://本机局域网IP:3000/staff
 http://本机局域网IP:3000/admin
+http://本机局域网IP:3000/admin/menu
+http://本机局域网IP:3000/admin/tables
+http://本机局域网IP:3000/admin/backups
+http://本机局域网IP:3000/setup
 ```
 
 如果手机或平板打不开，检查 Windows 防火墙是否允许 3000 和 3001 端口。

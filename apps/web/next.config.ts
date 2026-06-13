@@ -9,6 +9,10 @@ const nextConfig: NextConfig = {
         source: '/api/:path*',
         destination: `${apiProxyTarget}/api/:path*`,
       },
+      {
+        source: '/uploads/:path*',
+        destination: `${apiProxyTarget}/uploads/:path*`,
+      },
     ];
   },
 };

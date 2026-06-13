@@ -8,3 +8,6 @@ coverage/
 *.log
 .*.log
 *.tsbuildinfo
+data/uploads/
+data/backups/
+apps/api/data/

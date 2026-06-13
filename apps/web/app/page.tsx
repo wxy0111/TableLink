@@ -7,6 +7,7 @@ export default function HomePage() {
         <div className="brand">系岛食堂</div>
         <nav className="nav">
           <Link href="/table/TABLE-01">顾客点餐</Link>
+          <Link href="/setup">初始化</Link>
           <Link href="/kitchen">厨房屏</Link>
           <Link href="/service">服务员面板</Link>
           <Link href="/staff">收银台</Link>

@@ -51,6 +51,10 @@ export default async function AdminPage({
           <p className="muted">经营信息、局域网访问地址和支付概览</p>
         </div>
         <nav className="nav">
+          <a href="/setup">初始化</a>
+          <a href="/admin/menu">菜品</a>
+          <a href="/admin/tables">桌台二维码</a>
+          <a href="/admin/backups">备份恢复</a>
           {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map((item) => (
             <a href={`/admin?period=${item}`} key={item}>
               {item}
@@ -143,4 +147,3 @@ export default async function AdminPage({
     </main>
   );
 }
-

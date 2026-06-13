@@ -1,0 +1,342 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RestaurantStatus {
+  active
+  inactive
+}
+
+enum TableStatus {
+  idle
+  occupied
+  dining
+  paying
+  closed
+}
+
+enum UserStatus {
+  active
+  inactive
+}
+
+enum Role {
+  owner
+  manager
+  cashier
+  waiter
+  kitchen
+}
+
+enum MenuItemStatus {
+  active
+  inactive
+  sold_out
+}
+
+enum KitchenStation {
+  hot
+  cold
+  drink
+  staple
+  other
+}
+
+enum OptionType {
+  single
+  multiple
+}
+
+enum OrderStatus {
+  submitted
+  accepted
+  cooking
+  ready
+  served
+  cancelled
+}
+
+enum PaymentStatus {
+  unpaid
+  partially_paid
+  paid
+  refunded
+}
+
+enum OrderItemStatus {
+  submitted
+  accepted
+  cooking
+  ready
+  served
+  cancelled
+  refunded
+}
+
+enum OperatorType {
+  customer
+  staff
+  system
+}
+
+enum PaymentMethod {
+  cash
+  wechat
+  alipay
+  card
+  other
+}
+
+enum PaymentRecordStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum ServiceCallStatus {
+  open
+  acknowledged
+  resolved
+  cancelled
+}
+
+model Restaurant {
+  id        String           @id @default(cuid())
+  name      String
+  status    RestaurantStatus @default(active)
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  tables     DiningTable[]
+  users      User[]
+  categories Category[]
+  menuItems  MenuItem[]
+  orders     Order[]
+  serviceCalls ServiceCall[]
+
+  @@map("restaurants")
+}
+
+model DiningTable {
+  id           String      @id @default(cuid())
+  restaurantId String      @map("restaurant_id")
+  name         String
+  code         String      @unique
+  capacity     Int         @default(4)
+  status       TableStatus @default(idle)
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+  orders     Order[]
+  serviceCalls ServiceCall[]
+
+  @@index([restaurantId])
+  @@map("tables")
+}
+
+model User {
+  id           String     @id @default(cuid())
+  restaurantId String     @map("restaurant_id")
+  name         String
+  phone        String?
+  email        String?
+  passwordHash String     @map("password_hash")
+  role         Role
+  status       UserStatus @default(active)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  restaurant Restaurant   @relation(fields: [restaurantId], references: [id])
+  orders     Order[]      @relation("OrderCreatedBy")
+  events     OrderEvent[]
+  handledServiceCalls ServiceCall[]
+
+  @@unique([restaurantId, phone])
+  @@unique([restaurantId, email])
+  @@index([restaurantId, role])
+  @@map("users")
+}
+
+model Category {
+  id           String   @id @default(cuid())
+  restaurantId String   @map("restaurant_id")
+  name         String
+  sortOrder    Int      @default(0) @map("sort_order")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+  menuItems  MenuItem[]
+
+  @@index([restaurantId, sortOrder])
+  @@map("categories")
+}
+
+model MenuItem {
+  id             String         @id @default(cuid())
+  restaurantId   String         @map("restaurant_id")
+  categoryId     String         @map("category_id")
+  name           String
+  description    String?
+  imageUrl       String?        @map("image_url")
+  price          Int
+  kitchenStation KitchenStation @default(other) @map("kitchen_station")
+  status         MenuItemStatus @default(active)
+  sortOrder      Int            @default(0) @map("sort_order")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  restaurant Restaurant       @relation(fields: [restaurantId], references: [id])
+  category   Category         @relation(fields: [categoryId], references: [id])
+  options    MenuItemOption[]
+  orderItems OrderItem[]
+
+  @@index([restaurantId, categoryId])
+  @@index([restaurantId, status])
+  @@map("menu_items")
+}
+
+model MenuItemOption {
+  id         String     @id @default(cuid())
+  menuItemId String     @map("menu_item_id")
+  name       String
+  type       OptionType
+  required   Boolean    @default(false)
+  values     Json
+  sortOrder  Int        @default(0) @map("sort_order")
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@index([menuItemId, sortOrder])
+  @@map("menu_item_options")
+}
+
+model Order {
+  id             String        @id @default(cuid())
+  restaurantId   String        @map("restaurant_id")
+  tableId        String        @map("table_id")
+  orderNo        String        @unique @map("order_no")
+  status         OrderStatus   @default(submitted)
+  paymentStatus  PaymentStatus @default(unpaid) @map("payment_status")
+  subtotalAmount Int           @default(0) @map("subtotal_amount")
+  discountAmount Int           @default(0) @map("discount_amount")
+  totalAmount    Int           @default(0) @map("total_amount")
+  remark         String?
+  createdByType  OperatorType  @default(customer) @map("created_by_type")
+  createdByUserId String?      @map("created_by_user_id")
+  submittedAt    DateTime      @default(now()) @map("submitted_at")
+  paidAt         DateTime?     @map("paid_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  restaurant    Restaurant    @relation(fields: [restaurantId], references: [id])
+  table         DiningTable   @relation(fields: [tableId], references: [id])
+  createdByUser User?         @relation("OrderCreatedBy", fields: [createdByUserId], references: [id])
+  items         OrderItem[]
+  events        OrderEvent[]
+  payments      Payment[]
+  serviceCalls  ServiceCall[]
+
+  @@index([restaurantId, createdAt])
+  @@index([tableId, paymentStatus])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String          @id @default(cuid())
+  orderId        String          @map("order_id")
+  menuItemId     String          @map("menu_item_id")
+  nameSnapshot   String          @map("name_snapshot")
+  priceSnapshot  Int             @map("price_snapshot")
+  quantity       Int
+  optionsSnapshot Json?          @map("options_snapshot")
+  status         OrderItemStatus @default(submitted)
+  kitchenStation KitchenStation  @default(other) @map("kitchen_station")
+  remark         String?
+  cookingStartedAt DateTime?     @map("cooking_started_at")
+  readyAt        DateTime?        @map("ready_at")
+  servedAt       DateTime?        @map("served_at")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  order    Order        @relation(fields: [orderId], references: [id])
+  menuItem MenuItem     @relation(fields: [menuItemId], references: [id])
+  events   OrderEvent[]
+
+  @@index([orderId])
+  @@index([kitchenStation, status])
+  @@index([status, createdAt])
+  @@map("order_items")
+}
+
+model ServiceCall {
+  id             String            @id @default(cuid())
+  restaurantId   String            @map("restaurant_id")
+  tableId        String            @map("table_id")
+  orderId        String?           @map("order_id")
+  status         ServiceCallStatus @default(open)
+  message        String?
+  handledByUserId String?          @map("handled_by_user_id")
+  acknowledgedAt DateTime?         @map("acknowledged_at")
+  resolvedAt     DateTime?         @map("resolved_at")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  restaurant Restaurant  @relation(fields: [restaurantId], references: [id])
+  table      DiningTable @relation(fields: [tableId], references: [id])
+  order      Order?      @relation(fields: [orderId], references: [id])
+  handledBy  User?       @relation(fields: [handledByUserId], references: [id])
+
+  @@index([restaurantId, status, createdAt])
+  @@index([tableId, status])
+  @@map("service_calls")
+}
+
+model OrderEvent {
+  id             String       @id @default(cuid())
+  orderId        String       @map("order_id")
+  orderItemId    String?      @map("order_item_id")
+  eventType      String       @map("event_type")
+  fromStatus     String?      @map("from_status")
+  toStatus       String?      @map("to_status")
+  amountDelta    Int          @default(0) @map("amount_delta")
+  operatorType   OperatorType @map("operator_type")
+  operatorUserId String?      @map("operator_user_id")
+  reason         String?
+  metadata       Json?
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  order        Order      @relation(fields: [orderId], references: [id])
+  orderItem    OrderItem? @relation(fields: [orderItemId], references: [id])
+  operatorUser User?      @relation(fields: [operatorUserId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@index([orderItemId])
+  @@map("order_events")
+}
+
+model Payment {
+  id        String              @id @default(cuid())
+  orderId   String              @map("order_id")
+  method    PaymentMethod
+  amount    Int
+  status    PaymentRecordStatus @default(pending)
+  paidAt    DateTime?           @map("paid_at")
+  createdAt DateTime            @default(now()) @map("created_at")
+  updatedAt DateTime            @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  @@index([orderId, status])
+  @@map("payments")
+}

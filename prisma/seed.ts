@@ -2,6 +2,14 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+const seedUsers = [
+  { name: '老板', phone: '13800000000', pin: '1111', role: 'owner' },
+  { name: '厨房屏', phone: '13800000001', pin: '2222', role: 'kitchen' },
+  { name: '收银员', phone: '13800000002', pin: '3333', role: 'cashier' },
+  { name: '服务员', phone: '13800000003', pin: '4444', role: 'waiter' },
+  { name: '店长', phone: '13800000004', pin: '5555', role: 'manager' },
+] as const;
+
 const categories = [
   {
     name: '招牌热菜',
@@ -111,23 +119,39 @@ async function main() {
         }),
       },
       users: {
-        create: [
-          {
-            name: '店长',
-            phone: '13800000000',
-            passwordHash: 'replace-with-real-password-hash',
-            role: 'owner',
-          },
-          {
-            name: '厨房屏',
-            phone: '13800000001',
-            passwordHash: 'replace-with-real-password-hash',
-            role: 'kitchen',
-          },
-        ],
+        create: seedUsers.map((user) => ({
+          name: user.name,
+          phone: user.phone,
+          passwordHash: `pin:${user.pin}`,
+          role: user.role,
+        })),
       },
     },
   });
+
+  for (const user of seedUsers) {
+    await prisma.user.upsert({
+      where: {
+        restaurantId_phone: {
+          restaurantId: 'seed-restaurant-xidao',
+          phone: user.phone,
+        },
+      },
+      update: {
+        name: user.name,
+        passwordHash: `pin:${user.pin}`,
+        role: user.role,
+        status: 'active',
+      },
+      create: {
+        restaurantId: 'seed-restaurant-xidao',
+        name: user.name,
+        phone: user.phone,
+        passwordHash: `pin:${user.pin}`,
+        role: user.role,
+      },
+    });
+  }
 
   for (const [categoryIndex, category] of categories.entries()) {
     await prisma.category.upsert({
@@ -180,4 +204,3 @@ main()
     await prisma.$disconnect();
     process.exit(1);
   });
-

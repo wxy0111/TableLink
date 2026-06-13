@@ -1,5 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { AuthGuard } from '../auth/auth.guard';
+import { Roles } from '../auth/roles.decorator';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { Request } from 'express';
@@ -9,6 +11,8 @@ import { UpsertMenuItemDto } from './dto/menu-item.dto';
 import { CreateTableDto } from './dto/table.dto';
 
 @Controller('admin')
+@UseGuards(AuthGuard)
+@Roles('owner', 'manager')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 

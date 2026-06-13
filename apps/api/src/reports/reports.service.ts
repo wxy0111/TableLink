@@ -97,6 +97,116 @@ export class ReportsService {
     };
   }
 
+  async getDailyClosing(dateInput?: string) {
+    const range = this.getRange('daily', dateInput);
+
+    const [orders, payments, auditLogs, printJobs] = await Promise.all([
+      this.prisma.order.findMany({
+        where: { createdAt: { gte: range.from, lt: range.to } },
+        orderBy: { createdAt: 'asc' },
+        include: { table: true, items: true, payments: true },
+      }),
+      this.prisma.payment.findMany({
+        where: { createdAt: { gte: range.from, lt: range.to } },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.auditLog.findMany({
+        where: { createdAt: { gte: range.from, lt: range.to } },
+        orderBy: { createdAt: 'desc' },
+        take: 80,
+        include: { table: true, order: true },
+      }),
+      this.prisma.printJob.findMany({
+        where: { createdAt: { gte: range.from, lt: range.to } },
+        orderBy: { createdAt: 'desc' },
+        take: 80,
+        include: { table: true, order: true, orderItem: true },
+      }),
+    ]);
+
+    const paidPayments = payments.filter((payment) => payment.status === 'paid');
+    const refundPayments = payments.filter((payment) => payment.status === 'refunded');
+    const refundedItems = orders.flatMap((order) =>
+      order.items
+        .filter((item) => item.status === 'refunded')
+        .map((item) => ({
+          id: item.id,
+          orderNo: order.orderNo,
+          tableName: order.table.name,
+          name: item.nameSnapshot,
+          quantity: item.quantity,
+          amount: item.priceSnapshot * item.quantity,
+        })),
+    );
+
+    const paymentMethods = Object.values(PaymentMethod).map((method) => ({
+      method,
+      paidAmount: paidPayments.filter((payment) => payment.method === method).reduce((sum, payment) => sum + payment.amount, 0),
+      refundAmount: refundPayments.filter((payment) => payment.method === method).reduce((sum, payment) => sum + payment.amount, 0),
+    }));
+
+    const unpaidOrders = orders
+      .filter((order) => order.paymentStatus !== 'paid' && order.status !== 'cancelled')
+      .map((order) => {
+        const paidAmount = order.payments.filter((payment) => payment.status === 'paid').reduce((sum, payment) => sum + payment.amount, 0);
+        const refundAmount = order.payments.filter((payment) => payment.status === 'refunded').reduce((sum, payment) => sum + payment.amount, 0);
+        return {
+          id: order.id,
+          orderNo: order.orderNo,
+          tableName: order.table.name,
+          totalAmount: order.totalAmount,
+          paidAmount,
+          remainingAmount: Math.max(order.totalAmount - paidAmount + refundAmount, 0),
+          paymentStatus: order.paymentStatus,
+        };
+      });
+
+    const grossAmount = orders.reduce((sum, order) => sum + order.totalAmount, 0);
+    const paidAmount = paidPayments.reduce((sum, payment) => sum + payment.amount, 0);
+    const refundAmount = refundPayments.reduce((sum, payment) => sum + payment.amount, 0);
+    const voidAmount = refundedItems.reduce((sum, item) => sum + item.amount, 0);
+
+    return {
+      date: range.from.toISOString().slice(0, 10),
+      from: range.from.toISOString(),
+      to: range.to.toISOString(),
+      totals: {
+        grossAmount,
+        paidAmount,
+        refundAmount,
+        netPaidAmount: paidAmount - refundAmount,
+        voidAmount,
+        unpaidAmount: unpaidOrders.reduce((sum, order) => sum + order.remainingAmount, 0),
+        orderCount: orders.length,
+        paidOrderCount: orders.filter((order) => order.paymentStatus === 'paid').length,
+        refundCount: refundPayments.length,
+        voidItemCount: refundedItems.length,
+        pendingPrintJobCount: printJobs.filter((job) => job.status === 'pending').length,
+        failedPrintJobCount: printJobs.filter((job) => job.status === 'failed').length,
+      },
+      paymentMethods,
+      refundedItems,
+      unpaidOrders,
+      auditLogs: auditLogs.map((log) => ({
+        id: log.id,
+        action: log.action,
+        summary: log.summary,
+        tableName: log.table?.name ?? null,
+        orderNo: log.order?.orderNo ?? null,
+        createdAt: log.createdAt,
+      })),
+      printJobs: printJobs.map((job) => ({
+        id: job.id,
+        jobType: job.jobType,
+        status: job.status,
+        title: job.title,
+        tableName: job.table?.name ?? null,
+        orderNo: job.order?.orderNo ?? null,
+        createdAt: job.createdAt,
+      })),
+    };
+  }
+
   private getRange(period: ReportPeriod, dateInput?: string): Range {
     const baseDate = dateInput ? new Date(`${dateInput}T00:00:00`) : new Date();
     if (Number.isNaN(baseDate.getTime())) {

@@ -12,6 +12,26 @@ async function request(path, options) {
   return body;
 }
 
+async function login(phone, pin) {
+  return request('/api/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ phone, pin }),
+  });
+}
+
+function withAuth(token, options = {}) {
+  return {
+    ...options,
+    headers: {
+      ...(options.headers ?? {}),
+      authorization: `Bearer ${token}`,
+    },
+  };
+}
+
+const kitchenSession = await login('13800000001', '2222');
+
 const table = await request('/api/public/tables/TABLE-02');
 const menu = await request(`/api/public/restaurants/${table.restaurantId}/menu`);
 const firstItem = menu.flatMap((category) => category.menuItems).find((item) => item.status === 'active');
@@ -37,7 +57,7 @@ const order = await request('/api/public/orders', {
   }),
 });
 
-const kitchenOrders = await request('/api/kitchen/orders');
+const kitchenOrders = await request('/api/kitchen/orders', withAuth(kitchenSession.token));
 const createdOrderInKitchen = kitchenOrders.find((kitchenOrder) => kitchenOrder.id === order.id);
 
 if (!createdOrderInKitchen) {
@@ -57,4 +77,3 @@ console.log(
     2,
   ),
 );
-

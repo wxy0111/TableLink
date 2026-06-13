@@ -1,8 +1,12 @@
-import { Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import { Controller, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '../auth/auth.guard';
+import { Roles } from '../auth/roles.decorator';
 import { KitchenStation, OrderItemStatus } from '@prisma/client';
 import { KitchenService } from './kitchen.service';
 
 @Controller('kitchen/orders')
+@UseGuards(AuthGuard)
+@Roles('owner', 'manager', 'kitchen')
 export class KitchenController {
   constructor(private readonly kitchenService: KitchenService) {}
 

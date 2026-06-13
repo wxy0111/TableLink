@@ -1,8 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '../auth/auth.guard';
+import { Roles } from '../auth/roles.decorator';
 import { TablesService } from './tables.service';
 import { ClearTableDto, MergeTablesDto, MoveTableDto, OpenTableDto } from './dto/frontdesk-table.dto';
 
 @Controller('staff/tables')
+@UseGuards(AuthGuard)
+@Roles('owner', 'manager', 'cashier', 'waiter')
 export class StaffTablesController {
   constructor(private readonly tablesService: TablesService) {}
 

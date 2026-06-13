@@ -562,6 +562,21 @@ textarea {
   width: 100%;
 }
 
+.auth-shell {
+  min-height: 100vh;
+  place-content: center;
+}
+
+.auth-panel {
+  margin: 0 auto;
+  max-width: 460px;
+  width: 100%;
+}
+
+.wide-card {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 720px) {
   .topbar {
     align-items: flex-start;

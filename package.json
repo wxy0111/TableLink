@@ -14,6 +14,7 @@
     "verify:order-flow": "node scripts/verify-order-flow.mjs",
     "verify:service-flow": "node scripts/verify-service-flow.mjs",
     "verify:frontdesk-flow": "node scripts/verify-frontdesk-flow.mjs",
+    "verify:auth-closing-flow": "node scripts/verify-auth-closing-flow.mjs",
     "typecheck": "npm run typecheck --workspaces",
     "lint": "npm run lint --workspaces"
   },

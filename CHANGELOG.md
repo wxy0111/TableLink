@@ -15,6 +15,25 @@
 
 ### 新增
 
+- 新增员工 PIN 登录页 `/login`。
+- 新增轻量 HMAC token 认证，支持 cookie 和 Bearer token。
+- 新增角色权限：
+  - 老板/店长可访问后台、菜单、桌台、备份、日结。
+  - 收银/服务员可访问前厅收银相关接口。
+  - 后厨可访问厨房接口。
+  - 未登录访问受保护接口返回 401。
+  - 角色不匹配返回 403。
+- 新增日结对账页 `/admin/daily-closing`：
+  - 营业额
+  - 实收
+  - 退款
+  - 退菜
+  - 未结订单
+  - 支付方式汇总
+  - 操作流水
+  - 打印任务
+- 新增日结对账接口 `GET /api/admin/reports/daily-closing`。
+- 新增 `scripts/verify-auth-closing-flow.mjs`，用于验证登录、权限和日结接口。
 - 新增前厅真实工作流：
   - 开台
   - 换桌
@@ -111,6 +130,8 @@
 - `npm.cmd run verify:order-flow` 通过。
 - `npm.cmd run verify:service-flow` 通过。
 - `npm.cmd run verify:frontdesk-flow` 通过。
+- `npm.cmd run verify:auth-closing-flow` 通过。
+- `/login`、`/admin/daily-closing` 返回 HTTP 200。
 - 收银台 `/staff` 支持开台、换桌、并桌、清台、加菜、退菜、催菜、等叫、收款和退款。
 - `/service` 服务员面板返回 HTTP 200。
 - 厨房任务接口返回等待时长、优先级和颜色状态。

@@ -1,7 +1,11 @@
-import { Controller, Get, Param, Patch } from '@nestjs/common';
+import { Controller, Get, Param, Patch, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '../auth/auth.guard';
+import { Roles } from '../auth/roles.decorator';
 import { ServiceTasksService } from './service.service';
 
 @Controller('service')
+@UseGuards(AuthGuard)
+@Roles('owner', 'manager', 'waiter')
 export class ServiceController {
   constructor(private readonly serviceTasksService: ServiceTasksService) {}
 
@@ -25,4 +29,3 @@ export class ServiceController {
     return this.serviceTasksService.markItemServed(orderItemId);
   }
 }
-

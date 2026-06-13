@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminModule } from './admin/admin.module';
+import { AuthModule } from './auth/auth.module';
 import { BackupsModule } from './backups/backups.module';
 import { KitchenModule } from './kitchen/kitchen.module';
 import { MenuModule } from './menu/menu.module';
@@ -14,6 +15,7 @@ import { TablesModule } from './tables/tables.module';
 @Module({
   imports: [
     PrismaModule,
+    AuthModule,
     TablesModule,
     MenuModule,
     OrdersModule,

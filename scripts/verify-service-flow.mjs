@@ -12,6 +12,27 @@ async function request(path, options) {
   return body;
 }
 
+async function login(phone, pin) {
+  return request('/api/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ phone, pin }),
+  });
+}
+
+function withAuth(token, options = {}) {
+  return {
+    ...options,
+    headers: {
+      ...(options.headers ?? {}),
+      authorization: `Bearer ${token}`,
+    },
+  };
+}
+
+const kitchenSession = await login('13800000001', '2222');
+const waiterSession = await login('13800000003', '4444');
+
 const table = await request('/api/public/tables/TABLE-04');
 const menu = await request(`/api/public/restaurants/${table.restaurantId}/menu`);
 const activeItems = menu.flatMap((category) => category.menuItems).filter((item) => item.status === 'active');
@@ -44,23 +65,23 @@ const serviceCall = await request(`/api/public/tables/${table.code}/service-call
   body: JSON.stringify({ message: 'verify call waiter' }),
 });
 
-const kitchenTasks = await request('/api/kitchen/orders/tasks');
+const kitchenTasks = await request('/api/kitchen/orders/tasks', withAuth(kitchenSession.token));
 const kitchenTask = kitchenTasks.find((task) => task.orderId === order.id);
 if (!kitchenTask) {
   throw new Error('Created order item was not visible in kitchen tasks');
 }
 
-await request(`/api/kitchen/orders/order-items/${kitchenTask.id}/start`, { method: 'PATCH' });
-await request(`/api/kitchen/orders/order-items/${kitchenTask.id}/ready`, { method: 'PATCH' });
+await request(`/api/kitchen/orders/order-items/${kitchenTask.id}/start`, withAuth(kitchenSession.token, { method: 'PATCH' }));
+await request(`/api/kitchen/orders/order-items/${kitchenTask.id}/ready`, withAuth(kitchenSession.token, { method: 'PATCH' }));
 
-const serviceTasks = await request('/api/service/tasks');
+const serviceTasks = await request('/api/service/tasks', withAuth(waiterSession.token));
 const readyItem = serviceTasks.readyItems.find((item) => item.id === kitchenTask.id);
 if (!readyItem) {
   throw new Error('Ready item was not visible in service tasks');
 }
 
-await request(`/api/service/order-items/${readyItem.id}/served`, { method: 'PATCH' });
-await request(`/api/service/calls/${serviceCall.id}/resolve`, { method: 'PATCH' });
+await request(`/api/service/order-items/${readyItem.id}/served`, withAuth(waiterSession.token, { method: 'PATCH' }));
+await request(`/api/service/calls/${serviceCall.id}/resolve`, withAuth(waiterSession.token, { method: 'PATCH' }));
 
 console.log(
   JSON.stringify(
@@ -77,4 +98,3 @@ console.log(
     2,
   ),
 );
-

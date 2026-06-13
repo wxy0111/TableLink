@@ -1,9 +1,13 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { AuthGuard } from '../auth/auth.guard';
+import { Roles } from '../auth/roles.decorator';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { AddOrderItemDto, HoldOrderItemDto, ReasonDto, RefundPaymentDto } from './dto/frontdesk-order.dto';
 import { OrdersService } from './orders.service';
 
 @Controller('staff/orders')
+@UseGuards(AuthGuard)
+@Roles('owner', 'manager', 'cashier', 'waiter')
 export class StaffOrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
@@ -40,6 +44,8 @@ export class StaffOrdersController {
 }
 
 @Controller('staff')
+@UseGuards(AuthGuard)
+@Roles('owner', 'manager', 'cashier', 'waiter')
 export class StaffOperationsController {
   constructor(private readonly ordersService: OrdersService) {}
 

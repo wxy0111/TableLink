@@ -1,3 +1,6 @@
+import { AuthRequired } from '../auth-required';
+import { getAuthHeaders, hasAuthToken } from '../auth-session';
+
 const apiBaseUrl = process.env.INTERNAL_API_BASE_URL ?? 'http://localhost:3001';
 
 type ReportSummary = {
@@ -24,7 +27,7 @@ function formatMoney(amount: number) {
 }
 
 async function getSummary(period: string) {
-  const response = await fetch(`${apiBaseUrl}/api/admin/reports/summary?period=${period}`, { cache: 'no-store' });
+  const response = await fetch(`${apiBaseUrl}/api/admin/reports/summary?period=${period}`, { cache: 'no-store', headers: await getAuthHeaders() });
   if (!response.ok) return null;
   return (await response.json()) as ReportSummary;
 }
@@ -40,6 +43,7 @@ export default async function AdminPage({
 }: {
   searchParams: Promise<{ period?: string }>;
 }) {
+  if (!(await hasAuthToken())) return <AuthRequired title="店长后台需要登录" />;
   const { period = 'daily' } = await searchParams;
   const [summary, localAccess] = await Promise.all([getSummary(period), getLocalAccess()]);
 
@@ -55,6 +59,7 @@ export default async function AdminPage({
           <a href="/admin/menu">菜品</a>
           <a href="/admin/tables">桌台二维码</a>
           <a href="/admin/backups">备份恢复</a>
+          <a href="/admin/daily-closing">日结</a>
           {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map((item) => (
             <a href={`/admin?period=${item}`} key={item}>
               {item}

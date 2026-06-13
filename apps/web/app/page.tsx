@@ -6,12 +6,14 @@ export default function HomePage() {
       <header className="topbar">
         <div className="brand">系岛食堂</div>
         <nav className="nav">
+          <Link href="/login">员工登录</Link>
           <Link href="/table/TABLE-01">顾客点餐</Link>
           <Link href="/setup">初始化</Link>
           <Link href="/kitchen">厨房屏</Link>
           <Link href="/service">服务员面板</Link>
           <Link href="/staff">收银台</Link>
           <Link href="/admin">店长后台</Link>
+          <Link href="/admin/daily-closing">日结</Link>
         </nav>
       </header>
       <section className="hero">

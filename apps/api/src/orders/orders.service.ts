@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
+import { AddOrderItemDto, HoldOrderItemDto, ReasonDto, RefundPaymentDto } from './dto/frontdesk-order.dto';
 
 @Injectable()
 export class OrdersService {
@@ -114,10 +115,8 @@ export class OrdersService {
       throw new BadRequestException('Cannot pay a cancelled order');
     }
 
-    const paidAmount = order.payments
-      .filter((payment) => payment.status === 'paid')
-      .reduce((sum, payment) => sum + payment.amount, 0);
-    const remainingAmount = order.totalAmount - paidAmount;
+    const netPaidAmount = this.calculateNetPaidAmount(order.payments);
+    const remainingAmount = order.totalAmount - netPaidAmount;
 
     if (remainingAmount <= 0) {
       throw new BadRequestException('Order is already paid');
@@ -127,7 +126,7 @@ export class OrdersService {
       throw new BadRequestException(`Payment amount exceeds remaining amount: ${remainingAmount}`);
     }
 
-    const nextPaidAmount = paidAmount + dto.amount;
+    const nextPaidAmount = netPaidAmount + dto.amount;
     const nextPaymentStatus = nextPaidAmount >= order.totalAmount ? 'paid' : 'partially_paid';
     const now = new Date();
 
@@ -166,6 +165,34 @@ export class OrdersService {
               },
             },
           },
+          auditLogs: {
+            create: {
+              restaurantId: order.restaurantId,
+              tableId: order.tableId,
+              action: 'payment.created',
+              operatorType: 'staff',
+              summary: `记录收款 ${dto.amount}`,
+              metadata: {
+                paymentId: payment.id,
+                method: dto.method,
+                note: dto.note ?? null,
+              },
+            },
+          },
+          printJobs: {
+            create: {
+              restaurantId: order.restaurantId,
+              tableId: order.tableId,
+              jobType: 'receipt_payment',
+              title: `收款 ${order.orderNo}`,
+              payload: {
+                orderNo: order.orderNo,
+                method: dto.method,
+                amount: dto.amount,
+                note: dto.note ?? null,
+              },
+            },
+          },
         },
         include: {
           items: true,
@@ -175,6 +202,393 @@ export class OrdersService {
       });
 
       return updatedOrder;
+    });
+  }
+
+  async addItem(orderId: string, dto: AddOrderItemDto) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { table: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (order.status === 'cancelled' || order.paymentStatus === 'paid') {
+      throw new BadRequestException('Cannot add items to a closed order');
+    }
+
+    const menuItem = await this.prisma.menuItem.findFirst({
+      where: {
+        id: dto.menuItemId,
+        restaurantId: order.restaurantId,
+        status: 'active',
+      },
+      include: { options: true },
+    });
+
+    if (!menuItem) {
+      throw new BadRequestException(`Menu item is unavailable: ${dto.menuItemId}`);
+    }
+
+    const selectedOptions = this.resolveOptions(menuItem.options, dto.options);
+    const unitPrice = menuItem.price + selectedOptions.reduce((sum, option) => sum + option.priceDelta, 0);
+    const amountDelta = unitPrice * dto.quantity;
+
+    return this.prisma.$transaction(async (tx) => {
+      const item = await tx.orderItem.create({
+        data: {
+          orderId,
+          menuItemId: menuItem.id,
+          nameSnapshot: menuItem.name,
+          priceSnapshot: unitPrice,
+          quantity: dto.quantity,
+          optionsSnapshot: selectedOptions.length ? selectedOptions : Prisma.JsonNull,
+          kitchenStation: menuItem.kitchenStation,
+          remark: dto.remark,
+          events: {
+            create: {
+              orderId,
+              eventType: 'order_item.added',
+              toStatus: 'submitted',
+              amountDelta,
+              operatorType: 'staff',
+              reason: dto.remark,
+            },
+          },
+        },
+      });
+
+      const updatedOrder = await tx.order.update({
+        where: { id: orderId },
+        data: {
+          subtotalAmount: { increment: amountDelta },
+          totalAmount: { increment: amountDelta },
+          status: order.status === 'served' || order.status === 'ready' ? 'accepted' : order.status,
+          auditLogs: {
+            create: {
+              restaurantId: order.restaurantId,
+              tableId: order.tableId,
+              action: 'order_item.added',
+              operatorType: 'staff',
+              summary: `加菜 ${menuItem.name} x ${dto.quantity}`,
+              metadata: { orderItemId: item.id, amountDelta, remark: dto.remark ?? null },
+            },
+          },
+          printJobs: {
+            create: {
+              restaurantId: order.restaurantId,
+              tableId: order.tableId,
+              orderItemId: item.id,
+              jobType: 'kitchen_add_item',
+              title: `加菜 ${order.table.name}`,
+              payload: {
+                orderNo: order.orderNo,
+                tableName: order.table.name,
+                itemName: menuItem.name,
+                quantity: dto.quantity,
+                remark: dto.remark ?? null,
+                kitchenStation: menuItem.kitchenStation,
+              },
+            },
+          },
+        },
+      });
+
+      await tx.diningTable.update({
+        where: { id: order.tableId },
+        data: { status: 'dining' },
+      });
+
+      return { ...item, order: updatedOrder };
+    });
+  }
+
+  async refundItem(orderId: string, orderItemId: string, dto: ReasonDto) {
+    const item = await this.prisma.orderItem.findFirst({
+      where: { id: orderItemId, orderId },
+      include: { order: { include: { table: true } } },
+    });
+
+    if (!item) {
+      throw new NotFoundException('Order item not found');
+    }
+
+    if (['cancelled', 'refunded'].includes(item.status)) {
+      throw new BadRequestException('Order item is already closed');
+    }
+
+    const amountDelta = -(item.priceSnapshot * item.quantity);
+
+    return this.prisma.$transaction(async (tx) => {
+      const updatedItem = await tx.orderItem.update({
+        where: { id: orderItemId },
+        data: {
+          status: 'refunded',
+          events: {
+            create: {
+              orderId,
+              eventType: 'order_item.refunded',
+              fromStatus: item.status,
+              toStatus: 'refunded',
+              amountDelta,
+              operatorType: 'staff',
+              reason: dto.reason,
+            },
+          },
+        },
+      });
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          subtotalAmount: { increment: amountDelta },
+          totalAmount: { increment: amountDelta },
+          auditLogs: {
+            create: {
+              restaurantId: item.order.restaurantId,
+              tableId: item.order.tableId,
+              action: 'order_item.refunded',
+              operatorType: 'staff',
+              summary: `退菜 ${item.nameSnapshot} x ${item.quantity}`,
+              metadata: { orderItemId, amountDelta, reason: dto.reason ?? null },
+            },
+          },
+          printJobs: {
+            create: {
+              restaurantId: item.order.restaurantId,
+              tableId: item.order.tableId,
+              orderItemId,
+              jobType: 'kitchen_refund_item',
+              title: `退菜 ${item.order.table.name}`,
+              payload: {
+                orderNo: item.order.orderNo,
+                tableName: item.order.table.name,
+                itemName: item.nameSnapshot,
+                quantity: item.quantity,
+                reason: dto.reason ?? null,
+              },
+            },
+          },
+        },
+      });
+
+      return updatedItem;
+    });
+  }
+
+  async urgeItem(orderId: string, orderItemId: string, dto: ReasonDto) {
+    const item = await this.prisma.orderItem.findFirst({
+      where: { id: orderItemId, orderId },
+      include: { order: { include: { table: true } } },
+    });
+
+    if (!item) {
+      throw new NotFoundException('Order item not found');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          orderItemId,
+          eventType: 'order_item.urged',
+          operatorType: 'staff',
+          reason: dto.reason,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          restaurantId: item.order.restaurantId,
+          tableId: item.order.tableId,
+          orderId,
+          action: 'order_item.urged',
+          operatorType: 'staff',
+          summary: `催菜 ${item.nameSnapshot}`,
+          metadata: { orderItemId, reason: dto.reason ?? null },
+        },
+      });
+
+      await tx.printJob.create({
+        data: {
+          restaurantId: item.order.restaurantId,
+          tableId: item.order.tableId,
+          orderId,
+          orderItemId,
+          jobType: 'kitchen_urge',
+          title: `催菜 ${item.order.table.name}`,
+          payload: {
+            orderNo: item.order.orderNo,
+            tableName: item.order.table.name,
+            itemName: item.nameSnapshot,
+            quantity: item.quantity,
+            reason: dto.reason ?? null,
+          },
+        },
+      });
+
+      return item;
+    });
+  }
+
+  async holdItem(orderId: string, orderItemId: string, dto: HoldOrderItemDto) {
+    const item = await this.prisma.orderItem.findFirst({
+      where: { id: orderItemId, orderId },
+      include: { order: { include: { table: true } } },
+    });
+
+    if (!item) {
+      throw new NotFoundException('Order item not found');
+    }
+
+    if (['ready', 'served', 'cancelled', 'refunded'].includes(item.status)) {
+      throw new BadRequestException('Only pending kitchen items can be held or resumed');
+    }
+
+    const nextStatus = dto.hold ? 'held' : 'submitted';
+    const eventType = dto.hold ? 'order_item.held' : 'order_item.resumed';
+
+    return this.prisma.$transaction(async (tx) => {
+      const updatedItem = await tx.orderItem.update({
+        where: { id: orderItemId },
+        data: {
+          status: nextStatus,
+          events: {
+            create: {
+              orderId,
+              eventType,
+              fromStatus: item.status,
+              toStatus: nextStatus,
+              operatorType: 'staff',
+              reason: dto.reason,
+            },
+          },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          restaurantId: item.order.restaurantId,
+          tableId: item.order.tableId,
+          orderId,
+          action: eventType,
+          operatorType: 'staff',
+          summary: `${dto.hold ? '等叫' : '恢复制作'} ${item.nameSnapshot}`,
+          metadata: { orderItemId, reason: dto.reason ?? null },
+        },
+      });
+
+      await tx.printJob.create({
+        data: {
+          restaurantId: item.order.restaurantId,
+          tableId: item.order.tableId,
+          orderId,
+          orderItemId,
+          jobType: dto.hold ? 'kitchen_hold' : 'kitchen_resume',
+          title: `${dto.hold ? '等叫' : '恢复'} ${item.order.table.name}`,
+          payload: {
+            orderNo: item.order.orderNo,
+            tableName: item.order.table.name,
+            itemName: item.nameSnapshot,
+            quantity: item.quantity,
+            reason: dto.reason ?? null,
+          },
+        },
+      });
+
+      return updatedItem;
+    });
+  }
+
+  async refundPayment(orderId: string, dto: RefundPaymentDto) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { payments: true, table: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    const netPaidAmount = this.calculateNetPaidAmount(order.payments);
+    if (dto.amount > netPaidAmount) {
+      throw new BadRequestException(`Refund amount exceeds paid amount: ${netPaidAmount}`);
+    }
+
+    const nextNetPaid = netPaidAmount - dto.amount;
+    const nextPaymentStatus = nextNetPaid <= 0 ? 'refunded' : nextNetPaid >= order.totalAmount ? 'paid' : 'partially_paid';
+
+    return this.prisma.$transaction(async (tx) => {
+      const refund = await tx.payment.create({
+        data: {
+          orderId,
+          method: dto.method,
+          amount: dto.amount,
+          status: 'refunded',
+          paidAt: new Date(),
+        },
+      });
+
+      return tx.order.update({
+        where: { id: orderId },
+        data: {
+          paymentStatus: nextPaymentStatus,
+          paidAt: nextPaymentStatus === 'paid' ? order.paidAt : null,
+          events: {
+            create: {
+              eventType: 'payment.refunded',
+              operatorType: 'staff',
+              amountDelta: -dto.amount,
+              reason: dto.reason,
+              metadata: { paymentId: refund.id, method: dto.method },
+            },
+          },
+          auditLogs: {
+            create: {
+              restaurantId: order.restaurantId,
+              tableId: order.tableId,
+              action: 'payment.refunded',
+              operatorType: 'staff',
+              summary: `退款 ${dto.amount}`,
+              metadata: { paymentId: refund.id, method: dto.method, reason: dto.reason ?? null },
+            },
+          },
+          printJobs: {
+            create: {
+              restaurantId: order.restaurantId,
+              tableId: order.tableId,
+              jobType: 'receipt_refund',
+              title: `退款 ${order.orderNo}`,
+              payload: {
+                orderNo: order.orderNo,
+                tableName: order.table.name,
+                method: dto.method,
+                amount: dto.amount,
+                reason: dto.reason ?? null,
+              },
+            },
+          },
+        },
+        include: { items: true, payments: true, table: true },
+      });
+    });
+  }
+
+  findAuditLogs() {
+    return this.prisma.auditLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: { table: true, order: true },
+    });
+  }
+
+  findPrintJobs() {
+    return this.prisma.printJob.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: { table: true, order: true, orderItem: true },
     });
   }
 
@@ -203,5 +617,11 @@ export class OrdersService {
     const ymd = date.toISOString().slice(0, 10).replaceAll('-', '');
     const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
     return `${ymd}-${suffix}`;
+  }
+
+  private calculateNetPaidAmount(payments: { amount: number; status: string }[]) {
+    const paidAmount = payments.filter((payment) => payment.status === 'paid').reduce((sum, payment) => sum + payment.amount, 0);
+    const refundedAmount = payments.filter((payment) => payment.status === 'refunded').reduce((sum, payment) => sum + payment.amount, 0);
+    return paidAmount - refundedAmount;
   }
 }

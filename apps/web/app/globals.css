@@ -461,6 +461,44 @@ textarea {
   gap: 10px;
 }
 
+.compact-form {
+  align-items: center;
+  margin: 10px 0;
+}
+
+.compact-form select {
+  min-width: 150px;
+}
+
+.order-panel {
+  border-top: 1px solid #e4dccf;
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.item-list {
+  display: grid;
+  gap: 8px;
+}
+
+.item-row {
+  align-items: center;
+  background: #f8f4ed;
+  border: 1px solid #e3d8c8;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(120px, 1fr) auto repeat(4, 36px);
+  padding: 8px;
+}
+
+.danger-button {
+  border-color: #b83232;
+  color: #b83232;
+}
+
 .chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -551,5 +589,13 @@ textarea {
   .kitchen-task,
   .service-task {
     grid-template-columns: 1fr;
+  }
+
+  .item-row {
+    grid-template-columns: 1fr repeat(3, 36px);
+  }
+
+  .item-row .pill {
+    justify-self: start;
   }
 }

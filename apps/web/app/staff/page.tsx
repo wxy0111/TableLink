@@ -8,8 +8,14 @@ async function getTables() {
   return response.json();
 }
 
-export default async function StaffPage() {
-  const tables = await getTables();
+async function getMenuItems() {
+  const response = await fetch(`${apiBaseUrl}/api/admin/menu-items`, { cache: 'no-store' });
+  if (!response.ok) return [];
+  return response.json();
+}
 
-  return <StaffDashboardClient initialTables={tables} />;
+export default async function StaffPage() {
+  const [tables, menuItems] = await Promise.all([getTables(), getMenuItems()]);
+
+  return <StaffDashboardClient initialTables={tables} initialMenuItems={menuItems} />;
 }

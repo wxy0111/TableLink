@@ -15,6 +15,21 @@
 
 ### 新增
 
+- 新增前厅真实工作流：
+  - 开台
+  - 换桌
+  - 并桌
+  - 清台
+  - 收银台加菜
+  - 退菜
+  - 催菜
+  - 等叫/恢复制作
+  - 组合支付
+  - 退款记录
+- 新增 `audit_logs` 操作审计基础表。
+- 新增 `print_jobs` 打印任务基础表。
+- 新增 `held` 菜品等叫状态。
+- 新增 `scripts/verify-frontdesk-flow.mjs`，用于验证前厅真实工作流。
 - 新增后台菜品管理页 `/admin/menu`：
   - 管理菜品分类
   - 新增和编辑菜品
@@ -95,6 +110,8 @@
 - `npm.cmd run typecheck` 通过。
 - `npm.cmd run verify:order-flow` 通过。
 - `npm.cmd run verify:service-flow` 通过。
+- `npm.cmd run verify:frontdesk-flow` 通过。
+- 收银台 `/staff` 支持开台、换桌、并桌、清台、加菜、退菜、催菜、等叫、收款和退款。
 - `/service` 服务员面板返回 HTTP 200。
 - 厨房任务接口返回等待时长、优先级和颜色状态。
 - Next 同源 `/api` 代理通过。

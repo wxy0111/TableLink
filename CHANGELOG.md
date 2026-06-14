@@ -15,6 +15,9 @@
 
 ### 新增
 
+- 新增 TableLink 品牌 logo，并写入 README 顶部展示。
+- 店长后台看板 `/admin` 顶部加入 TableLink logo 品牌标识。
+- logo 最终采用二维码科技风格：深色科技底、扫描角、二维码模块和青绿色连接元素。
 - 新增员工 PIN 登录页 `/login`。
 - 新增轻量 HMAC token 认证，支持 cookie 和 Bearer token。
 - 新增角色权限：

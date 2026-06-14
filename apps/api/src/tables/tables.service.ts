@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { StateMachineService } from '../workflow/state-machine.service';
 import { ClearTableDto, MergeTablesDto, MoveTableDto, OpenTableDto } from './dto/frontdesk-table.dto';
 
 @Injectable()
 export class TablesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly stateMachine: StateMachineService,
+  ) {}
 
   async findByCode(code: string) {
     const table = await this.prisma.diningTable.findUnique({
@@ -41,6 +45,7 @@ export class TablesService {
     }
 
     const orderNo = this.createOrderNo();
+    this.stateMachine.assertTableTransition(table.status, 'occupied');
 
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.order.create({
@@ -102,6 +107,8 @@ export class TablesService {
     if (activeOrders.length === 0) {
       throw new BadRequestException('Source table has no active orders');
     }
+    this.stateMachine.assertTableTransition(sourceTable.status, 'idle');
+    this.stateMachine.assertTableTransition(targetTable.status, 'dining');
 
     return this.prisma.$transaction(async (tx) => {
       await tx.order.updateMany({
@@ -160,6 +167,8 @@ export class TablesService {
     if (activeOrders.length === 0) {
       throw new BadRequestException('Source table has no active orders');
     }
+    this.stateMachine.assertTableTransition(sourceTable.status, 'idle');
+    this.stateMachine.assertTableTransition(targetTable.status, 'dining');
 
     return this.prisma.$transaction(async (tx) => {
       await tx.order.updateMany({
@@ -220,6 +229,7 @@ export class TablesService {
     if (unpaidOrders > 0) {
       throw new BadRequestException('Cannot clear table with unpaid orders');
     }
+    this.stateMachine.assertTableTransition(table.status, 'idle');
 
     return this.prisma.$transaction(async (tx) => {
       await tx.auditLog.create({

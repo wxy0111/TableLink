@@ -114,6 +114,15 @@ enum PrintJobStatus {
   cancelled
 }
 
+enum LedgerEntryType {
+  item_sale
+  item_void
+  payment_received
+  payment_refund
+  discount
+  adjustment
+}
+
 model Restaurant {
   id        String           @id @default(cuid())
   name      String
@@ -121,14 +130,15 @@ model Restaurant {
   createdAt DateTime         @default(now()) @map("created_at")
   updatedAt DateTime         @updatedAt @map("updated_at")
 
-  tables       DiningTable[]
-  users        User[]
-  categories   Category[]
-  menuItems    MenuItem[]
-  orders       Order[]
-  serviceCalls ServiceCall[]
-  auditLogs    AuditLog[]
-  printJobs    PrintJob[]
+  tables        DiningTable[]
+  users         User[]
+  categories    Category[]
+  menuItems     MenuItem[]
+  orders        Order[]
+  serviceCalls  ServiceCall[]
+  auditLogs     AuditLog[]
+  printJobs     PrintJob[]
+  ledgerEntries LedgerEntry[]
 
   @@map("restaurants")
 }
@@ -143,11 +153,12 @@ model DiningTable {
   createdAt    DateTime    @default(now()) @map("created_at")
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
-  restaurant   Restaurant    @relation(fields: [restaurantId], references: [id])
-  orders       Order[]
-  serviceCalls ServiceCall[]
-  auditLogs    AuditLog[]
-  printJobs    PrintJob[]
+  restaurant    Restaurant    @relation(fields: [restaurantId], references: [id])
+  orders        Order[]
+  serviceCalls  ServiceCall[]
+  auditLogs     AuditLog[]
+  printJobs     PrintJob[]
+  ledgerEntries LedgerEntry[]
 
   @@index([restaurantId])
   @@map("tables")
@@ -260,6 +271,7 @@ model Order {
   serviceCalls  ServiceCall[]
   auditLogs     AuditLog[]
   printJobs     PrintJob[]
+  ledgerEntries LedgerEntry[]
 
   @@index([restaurantId, createdAt])
   @@index([tableId, paymentStatus])
@@ -283,10 +295,11 @@ model OrderItem {
   createdAt        DateTime        @default(now()) @map("created_at")
   updatedAt        DateTime        @updatedAt @map("updated_at")
 
-  order     Order        @relation(fields: [orderId], references: [id])
-  menuItem  MenuItem     @relation(fields: [menuItemId], references: [id])
-  events    OrderEvent[]
-  printJobs PrintJob[]
+  order         Order         @relation(fields: [orderId], references: [id])
+  menuItem      MenuItem      @relation(fields: [menuItemId], references: [id])
+  events        OrderEvent[]
+  printJobs     PrintJob[]
+  ledgerEntries LedgerEntry[]
 
   @@index([orderId])
   @@index([kitchenStation, status])
@@ -350,7 +363,8 @@ model Payment {
   createdAt DateTime            @default(now()) @map("created_at")
   updatedAt DateTime            @updatedAt @map("updated_at")
 
-  order Order @relation(fields: [orderId], references: [id])
+  order         Order         @relation(fields: [orderId], references: [id])
+  ledgerEntries LedgerEntry[]
 
   @@index([orderId, status])
   @@map("payments")
@@ -402,4 +416,32 @@ model PrintJob {
   @@index([restaurantId, status, createdAt])
   @@index([orderId, createdAt])
   @@map("print_jobs")
+}
+
+model LedgerEntry {
+  id           String          @id @default(cuid())
+  restaurantId String          @map("restaurant_id")
+  tableId      String?         @map("table_id")
+  orderId      String?         @map("order_id")
+  orderItemId  String?         @map("order_item_id")
+  paymentId    String?         @map("payment_id")
+  entryType    LedgerEntryType @map("entry_type")
+  amount       Int
+  sourceId     String          @map("source_id")
+  note         String?
+  metadata     Json?
+  occurredAt   DateTime        @default(now()) @map("occurred_at")
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  restaurant Restaurant   @relation(fields: [restaurantId], references: [id])
+  table      DiningTable? @relation(fields: [tableId], references: [id])
+  order      Order?       @relation(fields: [orderId], references: [id])
+  orderItem  OrderItem?   @relation(fields: [orderItemId], references: [id])
+  payment    Payment?     @relation(fields: [paymentId], references: [id])
+
+  @@unique([entryType, sourceId])
+  @@index([restaurantId, occurredAt])
+  @@index([orderId, occurredAt])
+  @@index([entryType, occurredAt])
+  @@map("ledger_entries")
 }

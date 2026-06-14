@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CreateServiceCallDto } from './dto/create-service-call.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { StateMachineService } from '../workflow/state-machine.service';
 
 @Injectable()
 export class ServiceTasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly stateMachine: StateMachineService,
+  ) {}
 
   async getCurrentServiceCall(tableCode: string) {
     const table = await this.prisma.diningTable.findUnique({ where: { code: tableCode } });
@@ -115,7 +119,7 @@ export class ServiceTasksService {
   }
 
   async markItemServed(orderItemId: string) {
-    const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId } });
+    const item = await this.prisma.orderItem.findUnique({ where: { id: orderItemId }, include: { order: true } });
     if (!item) {
       throw new NotFoundException('Order item not found');
     }
@@ -123,6 +127,7 @@ export class ServiceTasksService {
     if (item.status !== 'ready') {
       throw new BadRequestException('Only ready items can be served');
     }
+    this.stateMachine.assertOrderItemTransition(item.status, 'served');
 
     return this.prisma.$transaction(async (tx) => {
       const updatedItem = await tx.orderItem.update({
@@ -150,6 +155,7 @@ export class ServiceTasksService {
       });
 
       if (unservedCount === 0) {
+        this.stateMachine.assertOrderTransition(item.order.status, 'served');
         await tx.order.update({
           where: { id: item.orderId },
           data: { status: 'served' },
@@ -177,4 +183,3 @@ export class ServiceTasksService {
     });
   }
 }
-

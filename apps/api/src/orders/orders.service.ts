@@ -1,13 +1,19 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LedgerService } from '../ledger/ledger.service';
+import { StateMachineService } from '../workflow/state-machine.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { AddOrderItemDto, HoldOrderItemDto, ReasonDto, RefundPaymentDto } from './dto/frontdesk-order.dto';
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ledger: LedgerService,
+    private readonly stateMachine: StateMachineService,
+  ) {}
 
   async createCustomerOrder(dto: CreateOrderDto) {
     const table = await this.prisma.diningTable.findUnique({
@@ -51,6 +57,7 @@ export class OrdersService {
 
     const totalAmount = orderItems.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
     const orderNo = this.createOrderNo();
+    this.stateMachine.assertTableTransition(table.status, 'dining');
 
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.order.create({
@@ -78,6 +85,23 @@ export class OrdersService {
         where: { id: table.id },
         data: { status: 'dining' },
       });
+
+      for (const item of order.items) {
+        await this.ledger.createItemSale(tx, {
+          restaurantId: table.restaurantId,
+          tableId: table.id,
+          orderId: order.id,
+          orderItemId: item.id,
+          amount: item.priceSnapshot * item.quantity,
+          sourceId: item.id,
+          note: `点菜 ${item.nameSnapshot} x ${item.quantity}`,
+          metadata: {
+            orderNo: order.orderNo,
+            tableName: table.name,
+            createdByType: 'customer',
+          },
+        });
+      }
 
       return order;
     });
@@ -128,6 +152,10 @@ export class OrdersService {
 
     const nextPaidAmount = netPaidAmount + dto.amount;
     const nextPaymentStatus = nextPaidAmount >= order.totalAmount ? 'paid' : 'partially_paid';
+    this.stateMachine.assertPaymentTransition(order.paymentStatus, nextPaymentStatus);
+    if (nextPaymentStatus === 'paid') {
+      this.stateMachine.assertTableTransition(order.table.status, 'paying');
+    }
     const now = new Date();
 
     return this.prisma.$transaction(async (tx) => {
@@ -138,6 +166,22 @@ export class OrdersService {
           amount: dto.amount,
           status: 'paid',
           paidAt: now,
+        },
+      });
+
+      await this.ledger.createPaymentReceived(tx, {
+        restaurantId: order.restaurantId,
+        tableId: order.tableId,
+        orderId,
+        paymentId: payment.id,
+        amount: dto.amount,
+        sourceId: payment.id,
+        note: `收款 ${dto.method}`,
+        occurredAt: now,
+        metadata: {
+          orderNo: order.orderNo,
+          method: dto.method,
+          note: dto.note ?? null,
         },
       });
 
@@ -235,6 +279,10 @@ export class OrdersService {
     const selectedOptions = this.resolveOptions(menuItem.options, dto.options);
     const unitPrice = menuItem.price + selectedOptions.reduce((sum, option) => sum + option.priceDelta, 0);
     const amountDelta = unitPrice * dto.quantity;
+    if (order.status === 'served' || order.status === 'ready') {
+      this.stateMachine.assertOrderTransition(order.status, 'accepted');
+    }
+    this.stateMachine.assertTableTransition(order.table.status, 'dining');
 
     return this.prisma.$transaction(async (tx) => {
       const item = await tx.orderItem.create({
@@ -296,6 +344,21 @@ export class OrdersService {
         },
       });
 
+      await this.ledger.createItemSale(tx, {
+        restaurantId: order.restaurantId,
+        tableId: order.tableId,
+        orderId,
+        orderItemId: item.id,
+        amount: amountDelta,
+        sourceId: item.id,
+        note: `加菜 ${menuItem.name} x ${dto.quantity}`,
+        metadata: {
+          orderNo: order.orderNo,
+          tableName: order.table.name,
+          remark: dto.remark ?? null,
+        },
+      });
+
       await tx.diningTable.update({
         where: { id: order.tableId },
         data: { status: 'dining' },
@@ -319,6 +382,7 @@ export class OrdersService {
       throw new BadRequestException('Order item is already closed');
     }
 
+    this.stateMachine.assertOrderItemTransition(item.status, 'refunded');
     const amountDelta = -(item.priceSnapshot * item.quantity);
 
     return this.prisma.$transaction(async (tx) => {
@@ -371,6 +435,21 @@ export class OrdersService {
               },
             },
           },
+        },
+      });
+
+      await this.ledger.createItemVoid(tx, {
+        restaurantId: item.order.restaurantId,
+        tableId: item.order.tableId,
+        orderId,
+        orderItemId,
+        amount: Math.abs(amountDelta),
+        sourceId: orderItemId,
+        note: `退菜 ${item.nameSnapshot} x ${item.quantity}`,
+        metadata: {
+          orderNo: item.order.orderNo,
+          tableName: item.order.table.name,
+          reason: dto.reason ?? null,
         },
       });
 
@@ -448,6 +527,7 @@ export class OrdersService {
     }
 
     const nextStatus = dto.hold ? 'held' : 'submitted';
+    this.stateMachine.assertOrderItemTransition(item.status, nextStatus);
     const eventType = dto.hold ? 'order_item.held' : 'order_item.resumed';
 
     return this.prisma.$transaction(async (tx) => {
@@ -519,6 +599,7 @@ export class OrdersService {
 
     const nextNetPaid = netPaidAmount - dto.amount;
     const nextPaymentStatus = nextNetPaid <= 0 ? 'refunded' : nextNetPaid >= order.totalAmount ? 'paid' : 'partially_paid';
+    this.stateMachine.assertPaymentTransition(order.paymentStatus, nextPaymentStatus);
 
     return this.prisma.$transaction(async (tx) => {
       const refund = await tx.payment.create({
@@ -528,6 +609,21 @@ export class OrdersService {
           amount: dto.amount,
           status: 'refunded',
           paidAt: new Date(),
+        },
+      });
+
+      await this.ledger.createPaymentRefund(tx, {
+        restaurantId: order.restaurantId,
+        tableId: order.tableId,
+        orderId,
+        paymentId: refund.id,
+        amount: dto.amount,
+        sourceId: refund.id,
+        note: `退款 ${dto.method}`,
+        metadata: {
+          orderNo: order.orderNo,
+          tableName: order.table.name,
+          reason: dto.reason ?? null,
         },
       });
 

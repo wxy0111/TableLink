@@ -170,16 +170,51 @@ paying
 closed
 ```
 
+状态流转由后端统一校验，避免各端直接写入任意状态。当前覆盖：
+
+```txt
+订单：submitted / accepted / cooking / ready / served / paid / cancelled / refunded
+菜品：submitted / accepted / held / cooking / ready / served / refunded / cancelled
+支付：unpaid / partially_paid / paid / refunded
+桌台：idle / occupied / dining / paying / closed
+```
+
+## 账本模型
+
+报表和日结对账以账本为准，而不是从订单当前状态临时倒推。订单、订单菜品和支付记录仍然保留业务快照，用来展示现场流程；金额统计则写入不可覆盖的账本流水。
+
+```txt
+ledger_entries
+  item_sale          下单/加菜产生的销售额
+  item_void          退菜/作废抵减销售额
+  payment_received   收款
+  payment_refund     退款
+  discount           折扣预留
+  adjustment         人工调整预留
+```
+
+统一口径：
+
+```txt
+营业额 = item_sale - item_void
+实收 = payment_received
+退款 = payment_refund
+净收款 = payment_received - payment_refund
+未收款 = max(营业额 - 净收款, 0)
+```
+
+这能支撑后续微信/支付宝异步回调、部分退款、反结账、跨日统计和审计追踪。
+
 ## 关键设计原则
 
 - 历史订单必须使用菜品名称、价格和规格快照。
-- 加菜、退菜、改价、支付都要写订单事件流水。
+- 加菜、退菜、改价、支付都要写订单事件流水；涉及金额的变化还要写账本流水。
 - 打印任务失败不能影响下单成功。
 - 支付状态和订单履约状态分离。
 - 厨房实时推送只负责通知，最终状态以数据库为准。
 - 本地局域网优先可用，不依赖公网才能完成点餐和出餐。
 - 微信/支付宝支付应和订单解耦，支付失败不能破坏订单数据。
-- 报表先做确定性数据统计，暂不做智能总结。
+- 报表先做确定性数据统计，统一从账本模型取数，暂不做智能总结。
 
 ## 报表范围
 

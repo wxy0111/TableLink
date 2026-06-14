@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PaymentMethod } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { LedgerService } from '../ledger/ledger.service';
 
 export type ReportPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
 
@@ -11,12 +12,15 @@ type Range = {
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly ledger: LedgerService,
+  ) {}
 
   async getSummary(period: ReportPeriod, dateInput?: string) {
     const range = this.getRange(period, dateInput);
 
-    const [orders, payments] = await Promise.all([
+    const [orders, payments, ledgerTotals] = await Promise.all([
       this.prisma.order.findMany({
         where: {
           createdAt: {
@@ -38,20 +42,13 @@ export class ReportsService {
           },
         },
       }),
+      this.ledger.getTotals(range),
     ]);
 
-    const grossAmount = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-    const paidAmount = payments.reduce((sum, payment) => sum + payment.amount, 0);
-    const unpaidAmount = orders.reduce((sum, order) => {
-      if (order.paymentStatus === 'paid' || order.status === 'cancelled') return sum;
-      const orderPaidAmount = order.payments
-        .filter((payment) => payment.status === 'paid')
-        .reduce((paymentSum, payment) => paymentSum + payment.amount, 0);
-      return sum + Math.max(order.totalAmount - orderPaidAmount, 0);
-    }, 0);
-    const refundAmount = payments
-      .filter((payment) => payment.status === 'refunded')
-      .reduce((sum, payment) => sum + payment.amount, 0);
+    const grossAmount = ledgerTotals.netSalesAmount;
+    const paidAmount = ledgerTotals.paidAmount;
+    const unpaidAmount = Math.max(ledgerTotals.netSalesAmount - ledgerTotals.netPaidAmount, 0);
+    const refundAmount = ledgerTotals.refundAmount;
 
     const topItemsByName = new Map<string, { name: string; quantity: number; amount: number }>();
     for (const order of orders) {
@@ -66,7 +63,7 @@ export class ReportsService {
 
     const paymentMethods = Object.values(PaymentMethod).map((method) => ({
       method,
-      amount: payments.filter((payment) => payment.method === method).reduce((sum, payment) => sum + payment.amount, 0),
+      amount: payments.filter((payment) => payment.method === method && payment.status === 'paid').reduce((sum, payment) => sum + payment.amount, 0),
     }));
 
     const occupiedTableIds = new Set(orders.map((order) => order.tableId));
@@ -77,6 +74,8 @@ export class ReportsService {
       to: range.to.toISOString(),
       grossAmount,
       paidAmount,
+      netPaidAmount: ledgerTotals.netPaidAmount,
+      voidAmount: ledgerTotals.voidAmount,
       unpaidAmount,
       refundAmount,
       orderCount: orders.length,
@@ -100,7 +99,7 @@ export class ReportsService {
   async getDailyClosing(dateInput?: string) {
     const range = this.getRange('daily', dateInput);
 
-    const [orders, payments, auditLogs, printJobs] = await Promise.all([
+    const [orders, payments, auditLogs, printJobs, ledgerTotals] = await Promise.all([
       this.prisma.order.findMany({
         where: { createdAt: { gte: range.from, lt: range.to } },
         orderBy: { createdAt: 'asc' },
@@ -122,6 +121,7 @@ export class ReportsService {
         take: 80,
         include: { table: true, order: true, orderItem: true },
       }),
+      this.ledger.getTotals(range),
     ]);
 
     const paidPayments = payments.filter((payment) => payment.status === 'paid');
@@ -161,10 +161,10 @@ export class ReportsService {
         };
       });
 
-    const grossAmount = orders.reduce((sum, order) => sum + order.totalAmount, 0);
-    const paidAmount = paidPayments.reduce((sum, payment) => sum + payment.amount, 0);
-    const refundAmount = refundPayments.reduce((sum, payment) => sum + payment.amount, 0);
-    const voidAmount = refundedItems.reduce((sum, item) => sum + item.amount, 0);
+    const grossAmount = ledgerTotals.netSalesAmount;
+    const paidAmount = ledgerTotals.paidAmount;
+    const refundAmount = ledgerTotals.refundAmount;
+    const voidAmount = ledgerTotals.voidAmount;
 
     return {
       date: range.from.toISOString().slice(0, 10),
@@ -174,9 +174,9 @@ export class ReportsService {
         grossAmount,
         paidAmount,
         refundAmount,
-        netPaidAmount: paidAmount - refundAmount,
+        netPaidAmount: ledgerTotals.netPaidAmount,
         voidAmount,
-        unpaidAmount: unpaidOrders.reduce((sum, order) => sum + order.remainingAmount, 0),
+        unpaidAmount: Math.max(ledgerTotals.netSalesAmount - ledgerTotals.netPaidAmount, 0),
         orderCount: orders.length,
         paidOrderCount: orders.filter((order) => order.paymentStatus === 'paid').length,
         refundCount: refundPayments.length,

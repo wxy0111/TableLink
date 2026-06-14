@@ -1,5 +1,26 @@
 # 更新日志
 
+## 2026-06-15
+
+### 架构重构
+
+- 新增 `ledger_entries` 账本表，记录菜品销售、退菜、收款、退款、折扣和人工调整等金额流水。
+- 新增账本回填迁移，将历史订单菜品和支付记录补写到账本，避免报表升级后历史数据丢失。
+- 新增后端账本服务，确保下单、加菜、退菜、收款、退款都会产生幂等账本记录。
+- 新增订单、菜品、支付和桌台状态机校验，集中限制非法状态跳转。
+- 店长后台经营信息和日结对账统一改为账本口径。
+- 新增 `scripts/verify-ledger-flow.mjs`，验证账本增量和日结报表一致。
+
+### 验证
+
+- `npm.cmd run db:migrate` 通过。
+- `npm.cmd run typecheck` 通过。
+- `npm.cmd run verify:ledger-flow` 通过。
+- `npm.cmd run verify:auth-closing-flow` 通过。
+- `npm.cmd run verify:order-flow` 通过。
+- `npm.cmd run verify:service-flow` 通过。
+- `npm.cmd run verify:frontdesk-flow` 通过。
+
 ## 2026-06-14
 
 ### 产品定位

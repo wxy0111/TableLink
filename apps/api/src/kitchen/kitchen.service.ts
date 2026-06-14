@@ -1,10 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { KitchenStation, OrderItemStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { StateMachineService } from '../workflow/state-machine.service';
 
 @Injectable()
 export class KitchenService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly stateMachine: StateMachineService,
+  ) {}
 
   findOrders(filter: { station?: KitchenStation; status?: OrderItemStatus }) {
     return this.prisma.order.findMany({
@@ -101,6 +105,8 @@ export class KitchenService {
     if (!['submitted', 'accepted'].includes(item.status)) {
       throw new BadRequestException('Only submitted or accepted items can start cooking');
     }
+    this.stateMachine.assertOrderItemTransition(item.status, 'cooking');
+    this.stateMachine.assertOrderTransition(item.order.status, 'cooking');
 
     return this.prisma.$transaction(async (tx) => {
       const updatedItem = await tx.orderItem.update({
@@ -132,6 +138,7 @@ export class KitchenService {
   async markItemReady(orderItemId: string) {
     const item = await this.prisma.orderItem.findUnique({
       where: { id: orderItemId },
+      include: { order: true },
     });
 
     if (!item) {
@@ -141,6 +148,7 @@ export class KitchenService {
     if (!['submitted', 'accepted', 'cooking'].includes(item.status)) {
       throw new BadRequestException('Only active kitchen items can be marked ready');
     }
+    this.stateMachine.assertOrderItemTransition(item.status, 'ready');
 
     return this.prisma.$transaction(async (tx) => {
       const updatedItem = await tx.orderItem.update({
@@ -168,6 +176,7 @@ export class KitchenService {
       });
 
       if (remainingActiveItems === 0) {
+        this.stateMachine.assertOrderTransition(item.order.status, 'ready');
         await tx.order.update({
           where: { id: item.orderId },
           data: { status: 'ready' },

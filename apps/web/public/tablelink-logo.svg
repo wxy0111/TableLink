@@ -1,6 +1,6 @@
 <svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">TableLink logo</title>
-  <desc id="desc">A modern technology-style TL monogram with scan corners and a connected table line.</desc>
+  <desc id="desc">A modern technology-style QR mark with scan corners and connected modules.</desc>
   <defs>
     <linearGradient id="bg" x1="74" y1="56" x2="438" y2="456" gradientUnits="userSpaceOnUse">
       <stop stop-color="#102B34"/>
@@ -16,11 +16,17 @@
   <path d="M384 170V128H302" stroke="url(#accent)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M128 342V384H210" stroke="url(#accent)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
   <path d="M384 342V384H302" stroke="url(#accent)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M156 196H292" stroke="#F7FBF8" stroke-width="46" stroke-linecap="round"/>
-  <path d="M224 196V330" stroke="#F7FBF8" stroke-width="46" stroke-linecap="round"/>
-  <path d="M304 188V318H372" stroke="#F7FBF8" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M142 316H370" stroke="url(#accent)" stroke-width="20" stroke-linecap="round"/>
-  <circle cx="142" cy="316" r="18" fill="#66F6FF"/>
-  <circle cx="370" cy="316" r="18" fill="#24D39A"/>
-  <circle cx="256" cy="316" r="10" fill="#071114"/>
+  <rect x="148" y="152" width="82" height="82" rx="18" fill="#F7FBF8"/>
+  <rect x="166" y="170" width="46" height="46" rx="10" fill="#071114"/>
+  <rect x="282" y="152" width="82" height="82" rx="18" fill="#F7FBF8"/>
+  <rect x="300" y="170" width="46" height="46" rx="10" fill="#071114"/>
+  <rect x="148" y="286" width="82" height="82" rx="18" fill="#F7FBF8"/>
+  <rect x="166" y="304" width="46" height="46" rx="10" fill="#071114"/>
+  <rect x="256" y="254" width="34" height="34" rx="9" fill="url(#accent)"/>
+  <rect x="310" y="254" width="54" height="34" rx="9" fill="#F7FBF8"/>
+  <rect x="256" y="308" width="34" height="60" rx="9" fill="#F7FBF8"/>
+  <rect x="310" y="334" width="54" height="34" rx="9" fill="url(#accent)"/>
+  <path d="M230 194H282" stroke="url(#accent)" stroke-width="18" stroke-linecap="round"/>
+  <path d="M190 234V286" stroke="url(#accent)" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="273" cy="271" r="8" fill="#071114"/>
 </svg>

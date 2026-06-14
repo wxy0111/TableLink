@@ -40,6 +40,18 @@ textarea {
   font-weight: 800;
 }
 
+.brand-lockup {
+  align-items: center;
+  display: inline-flex;
+  gap: 10px;
+}
+
+.brand-lockup img {
+  display: block;
+  height: 42px;
+  width: 42px;
+}
+
 .nav {
   display: flex;
   gap: 8px;

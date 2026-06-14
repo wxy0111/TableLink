@@ -4,7 +4,10 @@ export default function HomePage() {
   return (
     <main className="shell">
       <header className="topbar">
-        <div className="brand">系岛食堂</div>
+        <div className="brand brand-lockup">
+          <img src="/tablelink-logo.svg" alt="TableLink" />
+          <span>TableLink</span>
+        </div>
         <nav className="nav">
           <Link href="/login">员工登录</Link>
           <Link href="/table/TABLE-01">顾客点餐</Link>

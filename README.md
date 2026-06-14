@@ -1,5 +1,9 @@
 # TableLink
 
+<p align="center">
+  <img src="apps/web/public/tablelink-logo.svg" width="120" alt="TableLink logo" />
+</p>
+
 TableLink 是一个面向中小型饭店的本地部署扫码点餐系统。当前项目以“系岛食堂”为示例门店，目标是在店内用一台本地 PC 作为服务器，让顾客、后厨、收银和店长都通过局域网网页完成日常堂食流程。
 
 ```txt

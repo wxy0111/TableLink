@@ -51,7 +51,10 @@ export default async function AdminPage({
     <main className="shell">
       <header className="topbar">
         <div>
-          <div className="brand">店长后台</div>
+          <div className="brand brand-lockup">
+            <img src="/tablelink-logo.svg" alt="TableLink" />
+            <span>店长后台</span>
+          </div>
           <p className="muted">经营信息、局域网访问地址和支付概览</p>
         </div>
         <nav className="nav">

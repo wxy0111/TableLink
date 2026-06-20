@@ -16,6 +16,8 @@
     "verify:frontdesk-flow": "node scripts/verify-frontdesk-flow.mjs",
     "verify:auth-closing-flow": "node scripts/verify-auth-closing-flow.mjs",
     "verify:ledger-flow": "node scripts/verify-ledger-flow.mjs",
+    "verify:store-dry-run": "node scripts/verify-store-dry-run.mjs",
+    "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces",
     "lint": "npm run lint --workspaces"
   },

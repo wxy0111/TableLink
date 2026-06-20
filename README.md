@@ -1,5 +1,29 @@
 # TableLink
 
+## Store Delivery Snapshot
+
+TableLink is now packaged for a local single-store trial:
+
+- Staff account management with hashed PINs, lockout protection, role changes, activation/deactivation, and PIN reset.
+- Business day settings, shifts, and daily closing checks for unpaid orders, open tables, open shifts, and print exceptions.
+- SSE realtime refresh for kitchen, service, cashier, admin reports, daily closing, print jobs, and menu updates.
+- Browser-print workflow for kitchen tickets, refund/urge/hold tickets, and cashier receipts.
+- Manual sold-out/recover controls for menu items.
+- Menu item options for spice level, size, add-ons, and other store-managed choices.
+- Discounts, rounding, comps, and service charges recorded through ledger and audit logs.
+- Controlled paid-order reopen for owner/manager.
+- Manual payments plus mock online payment intents for future gateway integration.
+- Versioned full-store backup and restore covering operating data.
+- Enhanced owner reports: turnover rate, average order amount, top items, void reasons, payment method mix, peak hours, and kitchen efficiency.
+- Local deployment scripts: `scripts\start-store.cmd`, `scripts\start-api.cmd`, `scripts\start-web.cmd`, and `scripts\check-store.cmd`.
+- Health endpoint: `GET /api/system/health`.
+
+Store handover docs:
+
+- [Local setup](docs/local-setup.md)
+- [Store trial checklist](docs/store-trial-checklist.md)
+- [Troubleshooting](docs/troubleshooting.md)
+
 <p align="center">
   <img src="apps/web/public/tablelink-logo.svg" width="120" alt="TableLink logo" />
 </p>

@@ -1,134 +1,166 @@
-# 本地环境和启动
+# TableLink Local Setup
 
-## 当前环境
+This guide is for running TableLink on one Windows PC inside a restaurant LAN.
+
+## 1. Prepare The PC
+
+Required:
+
+- Windows 10/11
+- Node.js 24 or newer
+- npm
+- PostgreSQL database, either local Docker Compose or an existing PostgreSQL server
+- A stable LAN connection
+
+Recommended:
+
+- Keep the store PC on wired Ethernet if possible.
+- Disable sleep while the restaurant is open.
+- Make sure Windows Firewall allows Node.js or ports `3000` and `3001`.
+
+## 2. Environment File
+
+From the project root:
+
+```powershell
+copy .env.example .env
+```
+
+Edit `.env`:
 
 ```txt
-Node.js：v24.16.0
-npm：11.13.0
-Git：2.54.0
-Docker Desktop：29.5.3
-Docker Compose：v5.1.4
+DATABASE_URL="postgresql://order_user:order_password@localhost:5432/order_system?schema=public"
+API_PORT=3001
+WEB_PORT=3000
+API_PROXY_TARGET="http://localhost:3001"
+PUBLIC_WEB_BASE_URL="http://localhost:3000"
+AUTH_SECRET="change-this-local-secret"
 ```
 
-确认命令：
-
-```powershell
-node --version
-npm.cmd --version
-git --version
-docker --version
-docker compose version
-```
-
-如果直接运行 `npm` 提示 `npm.ps1 cannot be loaded because running scripts is disabled`，在 PowerShell 里改用 `npm.cmd` 即可。
-
-## 首次启动
-
-复制环境变量：
-
-```powershell
-Copy-Item .env.example .env
-```
-
-如果要让桌台二维码给手机扫码使用，把 `.env` 里的 `PUBLIC_WEB_BASE_URL` 改成本机局域网地址，例如：
+For real LAN use, set `PUBLIC_WEB_BASE_URL` to the store PC LAN address, for example:
 
 ```txt
 PUBLIC_WEB_BASE_URL="http://192.168.1.20:3000"
 ```
 
-安装依赖：
+Do not paste secrets into screenshots or chat groups.
+
+## 3. Install And Initialize
 
 ```powershell
 npm.cmd install
-```
-
-启动 PostgreSQL：
-
-```powershell
-docker compose up -d
-```
-
-生成 Prisma Client：
-
-```powershell
 npm.cmd run db:generate
-```
-
-创建数据库表：
-
-```powershell
 npm.cmd run db:migrate
-```
-
-写入系岛食堂测试数据：
-
-```powershell
 npm.cmd run db:seed
 ```
 
-启动后端：
+The seed creates hashed PIN accounts. It does not store `pin:1111` plain PIN values.
 
-```powershell
-npm.cmd run dev:api
-```
-
-另开一个 PowerShell，启动前端：
-
-```powershell
-npm.cmd run dev:web
-```
-
-打开：
+Default seed logins:
 
 ```txt
-http://localhost:3000
+Owner    13800000000 / 1111
+Kitchen  13800000001 / 2222
+Cashier  13800000002 / 3333
+Waiter   13800000003 / 4444
+Manager  13800000004 / 5555
 ```
 
-测试桌台入口：
+After first login, use `/admin/users` to create real staff accounts and replace demo PINs.
 
-```txt
-http://localhost:3000/table/TABLE-01
-```
+## 4. Start The Store
 
-验证点餐主链路：
+Recommended:
 
 ```powershell
-npm.cmd run verify:order-flow
+scripts\start-store.cmd
 ```
 
-该脚本会用 `TABLE-02` 创建一笔测试订单，并确认厨房接口能看到该订单。
+This script:
 
-## Seed 数据
+- checks `.env`
+- runs Prisma generate
+- asks whether to run migrations
+- starts API and Web in separate windows
+- prints common page URLs
+- prints LAN IPv4 addresses
 
-当前 seed 包含：
-
-- 店名：系岛食堂
-- 桌台：A01 到 A11
-- 桌台二维码 code：TABLE-01 到 TABLE-11
-- 菜品分类：11 个
-- 菜品：33 个常见川菜和饮品/主食
-
-## 局域网访问
-
-开发服务默认监听 `0.0.0.0`。在本地 PC 上运行：
+Manual startup:
 
 ```powershell
-ipconfig
+scripts\start-api.cmd
+scripts\start-web.cmd
 ```
 
-找到 Wi-Fi 或以太网 IPv4 地址后，店内其他设备访问：
+## 5. Check Health
+
+After API and Web start:
+
+```powershell
+scripts\check-store.cmd
+```
+
+Or open:
 
 ```txt
-http://本机局域网IP:3000
-http://本机局域网IP:3000/table/TABLE-01
-http://本机局域网IP:3000/kitchen
-http://本机局域网IP:3000/service
-http://本机局域网IP:3000/staff
-http://本机局域网IP:3000/admin
-http://本机局域网IP:3000/admin/menu
-http://本机局域网IP:3000/admin/tables
-http://本机局域网IP:3000/admin/backups
-http://本机局域网IP:3000/setup
+http://localhost:3001/api/system/health
 ```
 
-如果手机或平板打不开，检查 Windows 防火墙是否允许 3000 和 3001 端口。
+Expected healthy response:
+
+```json
+{
+  "api": "ok",
+  "database": "ok",
+  "realtime": "ok",
+  "storage": "ok",
+  "version": "0.0.0-local",
+  "checkedAt": "2026-06-18T00:00:00.000Z"
+}
+```
+
+If `api` is `degraded`, check the `errors` array.
+
+## 6. Common Pages
+
+```txt
+Home           http://localhost:3000
+Login          http://localhost:3000/login
+Table sample   http://localhost:3000/table/TABLE-01
+Kitchen        http://localhost:3000/kitchen
+Service        http://localhost:3000/service
+Staff          http://localhost:3000/staff
+Print jobs     http://localhost:3000/print
+Admin          http://localhost:3000/admin
+Daily closing  http://localhost:3000/admin/daily-closing
+Menu admin     http://localhost:3000/admin/menu
+Tables admin   http://localhost:3000/admin/tables
+Users admin    http://localhost:3000/admin/users
+Backups        http://localhost:3000/admin/backups
+Setup          http://localhost:3000/setup
+```
+
+For phones and tablets, replace `localhost` with the store PC LAN IP.
+
+## 7. Final Store Configuration
+
+Before trial operation:
+
+- Open `/setup` and confirm restaurant name and business day start time.
+- Open `/admin/users` and create real owner, manager, cashier, waiter, and kitchen users.
+- Open `/admin/tables` and confirm table QR codes.
+- Open `/admin/menu` and confirm categories, menu items, sold-out state, and options.
+- Open `/staff` and open a shift.
+- Export one backup from `/admin/backups`.
+
+## 8. Local Verification Commands
+
+For developers or technical operators:
+
+```powershell
+npm.cmd run test
+npm.cmd run typecheck
+npm.cmd run lint
+npm.cmd run build -w apps/api
+npm.cmd run build -w apps/web
+```

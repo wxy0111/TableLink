@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { hashPin, isLegacyPinHash, verifyPinHash } from './pin-hash';
 
 export type AuthUser = {
   id: string;
@@ -15,17 +16,39 @@ type TokenPayload = AuthUser & {
   exp: number;
 };
 
+type LoginFailureState = {
+  count: number;
+  lockedUntil?: number;
+};
+
+const MAX_LOGIN_FAILURES = 5;
+const LOGIN_LOCK_MS = 5 * 60 * 1000;
+
 @Injectable()
 export class AuthService {
+  private readonly loginFailures = new Map<string, LoginFailureState>();
+
   constructor(private readonly prisma: PrismaService) {}
 
-  async login(phone: string, pin: string) {
+  async login(phone: string, pin: string, ipAddress?: string) {
+    this.assertLoginNotLocked(phone, ipAddress);
+
     const user = await this.prisma.user.findFirst({
       where: { phone, status: 'active' },
     });
 
     if (!user || !this.verifyPin(pin, user.passwordHash)) {
-      throw new UnauthorizedException('手机号或 PIN 不正确');
+      this.recordLoginFailure(phone, ipAddress);
+      throw new UnauthorizedException('Phone or PIN is incorrect');
+    }
+
+    this.clearLoginFailures(phone, ipAddress);
+
+    if (isLegacyPinHash(user.passwordHash)) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: hashPin(pin) },
+      });
     }
 
     const authUser: AuthUser = {
@@ -67,8 +90,44 @@ export class AuthService {
     };
   }
 
-  private verifyPin(pin: string, passwordHash: string) {
-    return passwordHash === `pin:${pin}`;
+  verifyPin(pin: string, passwordHash: string) {
+    return verifyPinHash(pin, passwordHash);
+  }
+
+  private assertLoginNotLocked(phone: string, ipAddress?: string) {
+    const now = Date.now();
+    for (const key of this.loginFailureKeys(phone, ipAddress)) {
+      const state = this.loginFailures.get(key);
+      if (state?.lockedUntil && state.lockedUntil > now) {
+        throw new UnauthorizedException('Login temporarily locked');
+      }
+
+      if (state?.lockedUntil && state.lockedUntil <= now) {
+        this.loginFailures.delete(key);
+      }
+    }
+  }
+
+  private recordLoginFailure(phone: string, ipAddress?: string) {
+    const now = Date.now();
+    for (const key of this.loginFailureKeys(phone, ipAddress)) {
+      const current = this.loginFailures.get(key);
+      const count = (current?.count ?? 0) + 1;
+      this.loginFailures.set(key, {
+        count,
+        lockedUntil: count >= MAX_LOGIN_FAILURES ? now + LOGIN_LOCK_MS : current?.lockedUntil,
+      });
+    }
+  }
+
+  private clearLoginFailures(phone: string, ipAddress?: string) {
+    for (const key of this.loginFailureKeys(phone, ipAddress)) {
+      this.loginFailures.delete(key);
+    }
+  }
+
+  private loginFailureKeys(phone: string, ipAddress?: string) {
+    return [`phone:${phone}`, ...(ipAddress ? [`ip:${ipAddress}`] : [])];
   }
 
   private signToken(user: AuthUser) {

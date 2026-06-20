@@ -8,7 +8,11 @@ export type ReportPeriod = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearl
 type Range = {
   from: Date;
   to: Date;
+  businessDate?: string;
+  businessDayStartMinute?: number;
 };
+
+const RESTAURANT_ID = 'seed-restaurant-xidao';
 
 @Injectable()
 export class ReportsService {
@@ -18,9 +22,9 @@ export class ReportsService {
   ) {}
 
   async getSummary(period: ReportPeriod, dateInput?: string) {
-    const range = this.getRange(period, dateInput);
+    const range = await this.getRange(period, dateInput);
 
-    const [orders, payments, ledgerTotals] = await Promise.all([
+    const [orders, payments, ledgerTotals, tableCount, voidEvents] = await Promise.all([
       this.prisma.order.findMany({
         where: {
           createdAt: {
@@ -43,12 +47,33 @@ export class ReportsService {
         },
       }),
       this.ledger.getTotals(range),
+      this.prisma.diningTable.count({
+        where: { restaurantId: RESTAURANT_ID },
+      }),
+      this.prisma.orderEvent.findMany({
+        where: {
+          eventType: 'order_item.refunded',
+          createdAt: {
+            gte: range.from,
+            lt: range.to,
+          },
+        },
+        include: { orderItem: true },
+      }),
     ]);
 
-    const grossAmount = ledgerTotals.netSalesAmount;
+    const grossSalesAmount = ledgerTotals.grossAmount;
+    const voidAmount = ledgerTotals.voidAmount;
+    const discountAmount = ledgerTotals.discountAmount;
+    const adjustmentAmount = ledgerTotals.adjustmentAmount;
+    const netSalesAmount = ledgerTotals.netSalesAmount;
     const paidAmount = ledgerTotals.paidAmount;
-    const unpaidAmount = Math.max(ledgerTotals.netSalesAmount - ledgerTotals.netPaidAmount, 0);
+    const netPaidAmount = ledgerTotals.netPaidAmount;
+    const unpaidAmount = Math.max(netSalesAmount - netPaidAmount, 0);
     const refundAmount = ledgerTotals.refundAmount;
+    const paidOrderCount = orders.filter((order) => order.paymentStatus === 'paid').length;
+    const averageOrderAmount = paidOrderCount ? Math.round(netSalesAmount / paidOrderCount) : 0;
+    const tableTurnoverRate = tableCount ? Number((paidOrderCount / tableCount).toFixed(2)) : 0;
 
     const topItemsByName = new Map<string, { name: string; quantity: number; amount: number }>();
     for (const order of orders) {
@@ -61,29 +86,47 @@ export class ReportsService {
       }
     }
 
+    const paidPaymentTotal = payments.filter((payment) => payment.status === 'paid').reduce((sum, payment) => sum + payment.amount, 0);
     const paymentMethods = Object.values(PaymentMethod).map((method) => ({
       method,
       amount: payments.filter((payment) => payment.method === method && payment.status === 'paid').reduce((sum, payment) => sum + payment.amount, 0),
+    })).map((method) => ({
+      ...method,
+      percentage: this.percentage(method.amount, paidPaymentTotal),
     }));
 
     const occupiedTableIds = new Set(orders.map((order) => order.tableId));
+    const voidReasons = this.buildVoidReasons(voidEvents);
+    const hourlySales = this.buildHourlySales(range, orders);
+    const kitchenEfficiency = this.buildKitchenEfficiency(orders);
 
     return {
       period,
+      businessDate: range.businessDate,
+      businessDayStart: range.businessDayStartMinute,
       from: range.from.toISOString(),
       to: range.to.toISOString(),
-      grossAmount,
+      grossSalesAmount,
+      voidAmount,
+      discountAmount,
+      adjustmentAmount,
+      netSalesAmount,
       paidAmount,
-      netPaidAmount: ledgerTotals.netPaidAmount,
-      voidAmount: ledgerTotals.voidAmount,
-      unpaidAmount,
       refundAmount,
+      netPaidAmount,
+      unpaidAmount,
+      tableCount,
+      tableTurnoverRate,
       orderCount: orders.length,
-      paidOrderCount: orders.filter((order) => order.paymentStatus === 'paid').length,
-      averageOrderAmount: orders.length ? Math.round(grossAmount / orders.length) : 0,
+      paidOrderCount,
+      averageOrderAmount,
       occupiedTableCount: occupiedTableIds.size,
       topItems: [...topItemsByName.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 10),
+      voidReasons,
       paymentMethods,
+      hourlySales,
+      kitchenEfficiency,
+      grossAmount: netSalesAmount,
       unpaidOrders: orders
         .filter((order) => order.paymentStatus !== 'paid' && order.status !== 'cancelled')
         .map((order) => ({
@@ -97,7 +140,7 @@ export class ReportsService {
   }
 
   async getDailyClosing(dateInput?: string) {
-    const range = this.getRange('daily', dateInput);
+    const range = await this.getRange('daily', dateInput);
 
     const [orders, payments, auditLogs, printJobs, ledgerTotals] = await Promise.all([
       this.prisma.order.findMany({
@@ -122,6 +165,18 @@ export class ReportsService {
         include: { table: true, order: true, orderItem: true },
       }),
       this.ledger.getTotals(range),
+    ]);
+    const [openShift, recentShift] = await Promise.all([
+      this.prisma.shift.findFirst({
+        where: { restaurantId: RESTAURANT_ID, status: 'open' },
+        orderBy: { openedAt: 'desc' },
+        include: { openedBy: true, closedBy: true },
+      }),
+      this.prisma.shift.findFirst({
+        where: { restaurantId: RESTAURANT_ID },
+        orderBy: { openedAt: 'desc' },
+        include: { openedBy: true, closedBy: true },
+      }),
     ]);
 
     const paidPayments = payments.filter((payment) => payment.status === 'paid');
@@ -165,17 +220,25 @@ export class ReportsService {
     const paidAmount = ledgerTotals.paidAmount;
     const refundAmount = ledgerTotals.refundAmount;
     const voidAmount = ledgerTotals.voidAmount;
+    const itemSaleAmount = ledgerTotals.grossAmount;
+    const discountAmount = ledgerTotals.discountAmount;
+    const adjustmentAmount = ledgerTotals.adjustmentAmount;
 
     return {
       date: range.from.toISOString().slice(0, 10),
+      businessDate: range.businessDate,
+      businessDayStart: range.businessDayStartMinute,
       from: range.from.toISOString(),
       to: range.to.toISOString(),
       totals: {
         grossAmount,
+        itemSaleAmount,
         paidAmount,
         refundAmount,
         netPaidAmount: ledgerTotals.netPaidAmount,
         voidAmount,
+        discountAmount,
+        adjustmentAmount,
         unpaidAmount: Math.max(ledgerTotals.netSalesAmount - ledgerTotals.netPaidAmount, 0),
         orderCount: orders.length,
         paidOrderCount: orders.filter((order) => order.paymentStatus === 'paid').length,
@@ -187,6 +250,7 @@ export class ReportsService {
       paymentMethods,
       refundedItems,
       unpaidOrders,
+      shift: openShift ?? recentShift,
       auditLogs: auditLogs.map((log) => ({
         id: log.id,
         action: log.action,
@@ -207,7 +271,64 @@ export class ReportsService {
     };
   }
 
-  private getRange(period: ReportPeriod, dateInput?: string): Range {
+  async getDailyClosingCheck(dateInput?: string) {
+    const range = await this.getRange('daily', dateInput);
+    const [orders, openTables, openShift, pendingPrintJobCount, failedPrintJobCount] = await Promise.all([
+      this.prisma.order.findMany({
+        where: {
+          createdAt: { gte: range.from, lt: range.to },
+          status: { not: 'cancelled' },
+          paymentStatus: { in: ['unpaid', 'partially_paid'] },
+        },
+        include: { table: true, payments: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.diningTable.findMany({
+        where: { restaurantId: RESTAURANT_ID, status: { in: ['occupied', 'dining', 'paying'] } },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.shift.findFirst({
+        where: { restaurantId: RESTAURANT_ID, status: 'open' },
+        orderBy: { openedAt: 'desc' },
+        include: { openedBy: true },
+      }),
+      this.prisma.printJob.count({
+        where: { createdAt: { gte: range.from, lt: range.to }, status: 'pending' },
+      }),
+      this.prisma.printJob.count({
+        where: { createdAt: { gte: range.from, lt: range.to }, status: 'failed' },
+      }),
+    ]);
+
+    const unpaidOrders = orders.map((order) => {
+      const paidAmount = order.payments.filter((payment) => payment.status === 'paid').reduce((sum, payment) => sum + payment.amount, 0);
+      const refundAmount = order.payments.filter((payment) => payment.status === 'refunded').reduce((sum, payment) => sum + payment.amount, 0);
+      return {
+        id: order.id,
+        orderNo: order.orderNo,
+        tableName: order.table.name,
+        totalAmount: order.totalAmount,
+        paidAmount,
+        remainingAmount: Math.max(order.totalAmount - paidAmount + refundAmount, 0),
+        paymentStatus: order.paymentStatus,
+      };
+    });
+
+    return {
+      canClose: unpaidOrders.length === 0 && openTables.length === 0 && !openShift,
+      businessDate: range.businessDate,
+      businessDayStart: range.businessDayStartMinute,
+      from: range.from.toISOString(),
+      to: range.to.toISOString(),
+      unpaidOrders,
+      openTables,
+      openShift,
+      pendingPrintJobCount,
+      failedPrintJobCount,
+    };
+  }
+
+  private async getRange(period: ReportPeriod, dateInput?: string): Promise<Range> {
     const baseDate = dateInput ? new Date(`${dateInput}T00:00:00`) : new Date();
     if (Number.isNaN(baseDate.getTime())) {
       throw new BadRequestException('Invalid date');
@@ -217,7 +338,14 @@ export class ReportsService {
     from.setHours(0, 0, 0, 0);
 
     if (period === 'daily') {
-      return { from, to: this.addDays(from, 1) };
+      const businessDayStartMinute = await this.getBusinessDayStartMinute();
+      const businessFrom = this.addMinutes(from, businessDayStartMinute);
+      return {
+        from: businessFrom,
+        to: this.addDays(businessFrom, 1),
+        businessDate: this.formatDate(from),
+        businessDayStartMinute,
+      };
     }
 
     if (period === 'weekly') {
@@ -246,9 +374,110 @@ export class ReportsService {
     throw new BadRequestException('Invalid period');
   }
 
+  private async getBusinessDayStartMinute() {
+    const restaurant = await this.prisma.restaurant.findFirst({
+      where: { id: RESTAURANT_ID },
+      select: { businessDayStartMinute: true },
+    });
+    return restaurant?.businessDayStartMinute ?? 0;
+  }
+
   private addDays(date: Date, days: number) {
     const next = new Date(date);
     next.setDate(next.getDate() + days);
     return next;
+  }
+
+  private addMinutes(date: Date, minutes: number) {
+    const next = new Date(date);
+    next.setMinutes(next.getMinutes() + minutes);
+    return next;
+  }
+
+  private formatDate(date: Date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  private percentage(amount: number, total: number) {
+    if (!total) return 0;
+    return Math.round((amount / total) * 10000) / 100;
+  }
+
+  private buildVoidReasons(events: { reason: string | null; amountDelta: number; orderItem?: { priceSnapshot: number; quantity: number } | null }[]) {
+    const reasons = new Map<string, { reason: string; count: number; amount: number }>();
+
+    for (const event of events) {
+      const reason = event.reason?.trim() || '未填写';
+      const current = reasons.get(reason) ?? { reason, count: 0, amount: 0 };
+      current.count += 1;
+      current.amount += Math.abs(event.amountDelta || (event.orderItem ? event.orderItem.priceSnapshot * event.orderItem.quantity : 0));
+      reasons.set(reason, current);
+    }
+
+    return [...reasons.values()].sort((a, b) => b.count - a.count || b.amount - a.amount);
+  }
+
+  private buildHourlySales(range: Range, orders: { createdAt: Date; totalAmount: number }[]) {
+    const buckets = Array.from({ length: 24 }, (_, index) => {
+      const hourDate = this.addHours(range.from, index);
+      return {
+        hour: `${String(hourDate.getHours()).padStart(2, '0')}:00`,
+        orderCount: 0,
+        salesAmount: 0,
+      };
+    });
+
+    for (const order of orders) {
+      const bucket = buckets.find((candidate) => candidate.hour === `${String(order.createdAt.getHours()).padStart(2, '0')}:00`);
+      if (!bucket) continue;
+      bucket.orderCount += 1;
+      bucket.salesAmount += order.totalAmount;
+    }
+
+    return buckets;
+  }
+
+  private buildKitchenEfficiency(orders: { items: { createdAt: Date; readyAt?: Date | null; servedAt?: Date | null }[] }[]) {
+    const readyMinutes: number[] = [];
+    const serveMinutes: number[] = [];
+    const overdueThresholdMinutes = 20;
+    let overdueItemCount = 0;
+
+    for (const item of orders.flatMap((order) => order.items)) {
+      if (item.readyAt) {
+        const ready = this.diffMinutes(item.createdAt, item.readyAt);
+        readyMinutes.push(ready);
+        if (ready > overdueThresholdMinutes) overdueItemCount += 1;
+      }
+
+      if (item.readyAt && item.servedAt) {
+        serveMinutes.push(this.diffMinutes(item.readyAt, item.servedAt));
+      }
+    }
+
+    return {
+      averageReadyMinutes: this.averageMinutes(readyMinutes),
+      averageServeMinutes: this.averageMinutes(serveMinutes),
+      overdueItemCount,
+      overdueThresholdMinutes,
+    };
+  }
+
+  private addHours(date: Date, hours: number) {
+    const next = new Date(date);
+    next.setHours(next.getHours() + hours);
+    return next;
+  }
+
+  private diffMinutes(from: Date, to: Date) {
+    return Math.max(0, Math.round((to.getTime() - from.getTime()) / 60000));
+  }
+
+  private averageMinutes(values: number[]) {
+    if (!values.length) return 0;
+    return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
   }
 }

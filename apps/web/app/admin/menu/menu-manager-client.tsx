@@ -2,6 +2,7 @@
 
 import { Upload } from 'lucide-react';
 import { FormEvent, useState } from 'react';
+import { useRealtimeEvents } from '../../use-realtime-events';
 
 type Category = { id: string; name: string; sortOrder: number; isActive: boolean };
 type MenuItem = {
@@ -14,6 +15,29 @@ type MenuItem = {
   kitchenStation: string;
   status: string;
   category?: { name: string };
+  options?: MenuOption[];
+};
+
+type MenuOptionValue = {
+  name: string;
+  priceDelta: number;
+};
+
+type MenuOption = {
+  id: string;
+  name: string;
+  type: 'single' | 'multiple';
+  required: boolean;
+  values: MenuOptionValue[];
+  sortOrder: number;
+};
+
+type OptionForm = {
+  name: string;
+  type: 'single' | 'multiple';
+  required: boolean;
+  valuesText: string;
+  sortOrder: number;
 };
 
 const stations = ['hot', 'cold', 'drink', 'staple', 'other'];
@@ -30,6 +54,7 @@ export function MenuManagerClient({
   const [menuItems, setMenuItems] = useState(initialMenuItems);
   const [categoryName, setCategoryName] = useState('');
   const [message, setMessage] = useState('');
+  const [optionForms, setOptionForms] = useState<Record<string, OptionForm>>({});
   const [form, setForm] = useState({
     categoryId: initialCategories[0]?.id ?? '',
     name: '',
@@ -48,6 +73,8 @@ export function MenuManagerClient({
     if (categoryResponse.ok) setCategories(await categoryResponse.json());
     if (itemResponse.ok) setMenuItems(await itemResponse.json());
   }
+
+  useRealtimeEvents(['menu.updated'], refresh);
 
   async function createCategory() {
     if (!categoryName.trim()) return;
@@ -92,23 +119,107 @@ export function MenuManagerClient({
     await refresh();
   }
 
-  async function updateMenuItem(item: MenuItem, patch: Partial<MenuItem>) {
-    const response = await fetch(`/api/admin/menu-items/${item.id}`, {
+  async function updateMenuItemStatus(item: MenuItem, status: string) {
+    const response = await fetch(`/api/admin/menu-items/${item.id}/status`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({
-        categoryId: item.categoryId,
-        name: item.name,
-        description: item.description ?? '',
-        price: item.price,
-        kitchenStation: item.kitchenStation,
-        status: item.status,
-        imageUrl: item.imageUrl ?? '',
-        ...patch,
-      }),
+      body: JSON.stringify({ status }),
     });
     if (response.ok) {
+      setMessage(status === 'sold_out' ? '菜品已沽清' : '菜品状态已更新');
       await refresh();
+    } else {
+      setMessage('菜品状态更新失败');
+    }
+  }
+
+  function getOptionForm(menuItemId: string) {
+    return (
+      optionForms[menuItemId] ?? {
+        name: '',
+        type: 'single',
+        required: false,
+        valuesText: '[{"name":"默认","priceDelta":0}]',
+        sortOrder: 0,
+      }
+    );
+  }
+
+  function parseValues(valuesText: string) {
+    const values = JSON.parse(valuesText) as MenuOptionValue[];
+    if (!Array.isArray(values)) throw new Error('values must be an array');
+    return values;
+  }
+
+  async function createOption(item: MenuItem) {
+    const optionForm = getOptionForm(item.id);
+    try {
+      const response = await fetch(`/api/admin/menu-items/${item.id}/options`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({
+          name: optionForm.name,
+          type: optionForm.type,
+          required: optionForm.required,
+          values: parseValues(optionForm.valuesText),
+          sortOrder: optionForm.sortOrder,
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.message ?? '规格保存失败');
+      }
+      setMessage('规格已保存');
+      setOptionForms((current) => ({ ...current, [item.id]: { ...getOptionForm(item.id), name: '' } }));
+      await refresh();
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : '规格保存失败');
+    }
+  }
+
+  async function editOption(option: MenuOption) {
+    const nextValue = window.prompt(
+      '编辑规格 JSON',
+      JSON.stringify(
+        {
+          name: option.name,
+          type: option.type,
+          required: option.required,
+          values: option.values,
+          sortOrder: option.sortOrder,
+        },
+        null,
+        2,
+      ),
+    );
+    if (!nextValue) return;
+
+    try {
+      const payload = JSON.parse(nextValue);
+      const response = await fetch(`/api/admin/menu-item-options/${option.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.message ?? '规格更新失败');
+      }
+      setMessage('规格已更新');
+      await refresh();
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : '规格更新失败');
+    }
+  }
+
+  async function deleteOption(option: MenuOption) {
+    const response = await fetch(`/api/admin/menu-item-options/${option.id}`, { method: 'DELETE' });
+    if (response.ok) {
+      setMessage('规格已删除');
+      await refresh();
+    } else {
+      const body = await response.json().catch(() => null);
+      setMessage(body?.message ?? '规格删除失败');
     }
   }
 
@@ -206,22 +317,75 @@ export function MenuManagerClient({
       </section>
 
       <section className="grid menu-grid">
-        {menuItems.map((item) => (
-          <article className="menu-item" key={item.id}>
-            {item.imageUrl ? <img className="menu-thumb" src={item.imageUrl} alt={item.name} /> : null}
-            <strong>{item.name}</strong>
-            <p className="muted">{item.category?.name} / {(item.price / 100).toFixed(2)} 元</p>
-            <div className="payment-actions">
-              {statuses.map((status) => (
-                <button className="button" type="button" key={status} onClick={() => updateMenuItem(item, { status })}>
-                  {status}
-                </button>
-              ))}
-            </div>
-          </article>
-        ))}
+        {menuItems.map((item) => {
+          const optionForm = getOptionForm(item.id);
+
+          return (
+            <article className="menu-item" key={item.id}>
+              {item.imageUrl ? <img className="menu-thumb" src={item.imageUrl} alt={item.name} /> : null}
+              <strong>{item.name}</strong>
+              <p className="muted">{item.category?.name} / {(item.price / 100).toFixed(2)} 元</p>
+              <div className="payment-actions">
+                {statuses.map((status) => (
+                  <button className="button" type="button" key={status} onClick={() => updateMenuItemStatus(item, status)}>
+                    {status}
+                  </button>
+                ))}
+              </div>
+
+              <div className="option-admin-panel">
+                <strong>规格</strong>
+                {(item.options ?? []).map((option) => (
+                  <div className="ticket-item" key={option.id}>
+                    <span>
+                      {option.name} / {option.type}
+                      {option.required ? ' / required' : ''}
+                      <span className="muted"> {option.values.map((value) => `${value.name}${value.priceDelta ? `+${value.priceDelta}` : ''}`).join(', ')}</span>
+                    </span>
+                    <button className="button" type="button" onClick={() => editOption(option)}>
+                      编辑
+                    </button>
+                    <button className="button danger-button" type="button" onClick={() => deleteOption(option)}>
+                      删除
+                    </button>
+                  </div>
+                ))}
+                <div className="option-form">
+                  <input
+                    placeholder="规格名"
+                    value={optionForm.name}
+                    onChange={(event) => setOptionForms((current) => ({ ...current, [item.id]: { ...optionForm, name: event.target.value } }))}
+                  />
+                  <select
+                    value={optionForm.type}
+                    onChange={(event) =>
+                      setOptionForms((current) => ({ ...current, [item.id]: { ...optionForm, type: event.target.value as OptionForm['type'] } }))
+                    }
+                  >
+                    <option value="single">single</option>
+                    <option value="multiple">multiple</option>
+                  </select>
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={optionForm.required}
+                      onChange={(event) => setOptionForms((current) => ({ ...current, [item.id]: { ...optionForm, required: event.target.checked } }))}
+                    />
+                    必选
+                  </label>
+                  <textarea
+                    value={optionForm.valuesText}
+                    onChange={(event) => setOptionForms((current) => ({ ...current, [item.id]: { ...optionForm, valuesText: event.target.value } }))}
+                  />
+                  <button className="button" type="button" onClick={() => createOption(item)}>
+                    添加规格
+                  </button>
+                </div>
+              </div>
+            </article>
+          );
+        })}
       </section>
     </main>
   );
 }
-

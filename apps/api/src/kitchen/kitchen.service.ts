@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { KitchenStation, OrderItemStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { StateMachineService } from '../workflow/state-machine.service';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class KitchenService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stateMachine: StateMachineService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   findOrders(filter: { station?: KitchenStation; status?: OrderItemStatus }) {
@@ -131,6 +133,7 @@ export class KitchenService {
         data: { status: 'cooking' },
       });
 
+      this.realtime.publish({ type: 'kitchen.updated' });
       return updatedItem;
     });
   }
@@ -183,6 +186,8 @@ export class KitchenService {
         });
       }
 
+      this.realtime.publish({ type: 'kitchen.updated' });
+      this.realtime.publish({ type: 'service.updated' });
       return updatedItem;
     });
   }

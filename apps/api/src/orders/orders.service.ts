@@ -1,11 +1,18 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { LedgerService } from '../ledger/ledger.service';
+import { normalizeMenuOptionValues } from '../menu/menu-option-values';
+import { PRINT_JOB_TYPES } from '../print/print-job-types';
+import { RealtimeService } from '../realtime/realtime.service';
 import { StateMachineService } from '../workflow/state-machine.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { AddOrderItemDto, HoldOrderItemDto, ReasonDto, RefundPaymentDto } from './dto/frontdesk-order.dto';
+import { CreateOrderAdjustmentDto, OrderAdjustmentType } from './dto/order-adjustment.dto';
+import { CreatePaymentIntentDto, MarkPaymentIntentPaidDto, MockPaymentWebhookDto } from './dto/payment-intent.dto';
+import { ReopenOrderDto } from './dto/reopen-order.dto';
 
 @Injectable()
 export class OrdersService {
@@ -13,6 +20,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly ledger: LedgerService,
     private readonly stateMachine: StateMachineService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   async createCustomerOrder(dto: CreateOrderDto) {
@@ -57,9 +65,11 @@ export class OrdersService {
 
     const totalAmount = orderItems.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
     const orderNo = this.createOrderNo();
+    const customerAccessToken = this.createCustomerAccessToken();
+    const customerAccessTokenHash = this.hashCustomerAccessToken(customerAccessToken);
     this.stateMachine.assertTableTransition(table.status, 'dining');
 
-    return this.prisma.$transaction(async (tx) => {
+    const order = await this.prisma.$transaction(async (tx) => {
       const order = await tx.order.create({
         data: {
           restaurantId: table.restaurantId,
@@ -68,6 +78,7 @@ export class OrdersService {
           remark: dto.remark,
           subtotalAmount: totalAmount,
           totalAmount,
+          customerAccessTokenHash,
           items: { create: orderItems },
           events: {
             create: {
@@ -75,6 +86,25 @@ export class OrdersService {
               toStatus: 'submitted',
               operatorType: 'customer',
               amountDelta: totalAmount,
+            },
+          },
+          printJobs: {
+            create: {
+              restaurantId: table.restaurantId,
+              tableId: table.id,
+              jobType: PRINT_JOB_TYPES.kitchenOrder,
+              title: `Kitchen order ${orderNo}`,
+              payload: {
+                orderNo,
+                tableName: table.name,
+                items: orderItems.map((item) => ({
+                  name: item.nameSnapshot,
+                  quantity: item.quantity,
+                  remark: item.remark ?? null,
+                  kitchenStation: item.kitchenStation,
+                })),
+                remark: dto.remark ?? null,
+              },
             },
           },
         },
@@ -105,6 +135,9 @@ export class OrdersService {
 
       return order;
     });
+
+    this.publishMany(['kitchen.updated', 'staff.tables.updated', 'admin.reports.updated', 'print.updated']);
+    return { ...order, customerAccessToken };
   }
 
   async findOne(orderId: string) {
@@ -123,6 +156,28 @@ export class OrdersService {
     }
 
     return order;
+  }
+
+  async findPublicOne(orderId: string, customerAccessToken?: string) {
+    const order = await this.findOne(orderId);
+
+    if (!order.customerAccessTokenHash) {
+      if (process.env.NODE_ENV !== 'production') {
+        return order;
+      }
+      throw new BadRequestException('Order access token is required');
+    }
+
+    if (!customerAccessToken || !this.safeEqualCustomerAccessToken(customerAccessToken, order.customerAccessTokenHash)) {
+      throw new BadRequestException('Invalid order access token');
+    }
+
+    const { customerAccessTokenHash: _customerAccessTokenHash, ...publicOrder } = order;
+    return publicOrder;
+  }
+
+  hashCustomerAccessToken(token: string) {
+    return createHash('sha256').update(token).digest('base64url');
   }
 
   async createPayment(orderId: string, dto: CreatePaymentDto) {
@@ -164,6 +219,7 @@ export class OrdersService {
           orderId,
           method: dto.method,
           amount: dto.amount,
+          channel: 'manual',
           status: 'paid',
           paidAt: now,
         },
@@ -227,7 +283,7 @@ export class OrdersService {
             create: {
               restaurantId: order.restaurantId,
               tableId: order.tableId,
-              jobType: 'receipt_payment',
+              jobType: PRINT_JOB_TYPES.receiptPayment,
               title: `收款 ${order.orderNo}`,
               payload: {
                 orderNo: order.orderNo,
@@ -245,6 +301,7 @@ export class OrdersService {
         },
       });
 
+      this.publishMany(['staff.tables.updated', 'admin.reports.updated', 'print.updated']);
       return updatedOrder;
     });
   }
@@ -329,7 +386,7 @@ export class OrdersService {
               restaurantId: order.restaurantId,
               tableId: order.tableId,
               orderItemId: item.id,
-              jobType: 'kitchen_add_item',
+              jobType: PRINT_JOB_TYPES.kitchenAddItem,
               title: `加菜 ${order.table.name}`,
               payload: {
                 orderNo: order.orderNo,
@@ -364,7 +421,409 @@ export class OrdersService {
         data: { status: 'dining' },
       });
 
+      this.publishMany(['staff.tables.updated', 'kitchen.updated', 'admin.reports.updated', 'print.updated']);
       return { ...item, order: updatedOrder };
+    });
+  }
+
+  async createPaymentIntent(orderId: string, dto: CreatePaymentIntentDto) {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { payments: true, table: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (order.status === 'cancelled') {
+      throw new BadRequestException('Cannot create a payment intent for a cancelled order');
+    }
+
+    const availableAmount = this.calculateAvailablePaymentAmount(order);
+    if (availableAmount <= 0) {
+      throw new BadRequestException('Order is already fully covered');
+    }
+
+    if (dto.amount > availableAmount) {
+      throw new BadRequestException(`Payment intent amount exceeds remaining amount: ${availableAmount}`);
+    }
+
+    const payment = await this.prisma.$transaction((tx) =>
+      tx.payment.create({
+        data: {
+          orderId,
+          method: dto.method,
+          amount: dto.amount,
+          channel: 'online',
+          status: 'pending',
+          merchantTradeNo: this.createMerchantTradeNo(order.orderNo),
+          expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+          rawPayload: {
+            mock: true,
+            orderNo: order.orderNo,
+          },
+        },
+      }),
+    );
+
+    this.publishMany(['staff.tables.updated']);
+    return this.toPaymentIntentResponse(payment);
+  }
+
+  async findPaymentIntent(paymentId: string) {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: { order: true },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment intent not found');
+    }
+
+    return this.toPaymentIntentResponse(payment);
+  }
+
+  async markPaymentIntentPaid(paymentId: string, dto: MarkPaymentIntentPaidDto): Promise<any> {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: { order: { include: { payments: true, table: true } } },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Payment intent not found');
+    }
+
+    if (payment.channel !== 'online') {
+      throw new BadRequestException('Only online payment intents can be marked paid');
+    }
+
+    if (payment.status === 'paid') {
+      return payment;
+    }
+
+    if (payment.status === 'closed') {
+      throw new BadRequestException('Closed payment intent cannot be marked paid');
+    }
+
+    if (payment.status !== 'pending') {
+      throw new BadRequestException(`Payment intent cannot be marked paid from ${payment.status}`);
+    }
+
+    const order = payment.order;
+    if (order.status === 'cancelled') {
+      throw new BadRequestException('Cannot pay a cancelled order');
+    }
+
+    const netPaidAmount = this.calculateNetPaidAmount(order.payments);
+    const remainingAmount = order.totalAmount - netPaidAmount;
+    if (payment.amount > remainingAmount) {
+      throw new BadRequestException(`Payment amount exceeds remaining amount: ${remainingAmount}`);
+    }
+
+    const nextPaidAmount = netPaidAmount + payment.amount;
+    const nextPaymentStatus = nextPaidAmount >= order.totalAmount ? 'paid' : 'partially_paid';
+    this.stateMachine.assertPaymentTransition(order.paymentStatus, nextPaymentStatus);
+    if (nextPaymentStatus === 'paid') {
+      this.stateMachine.assertTableTransition(order.table.status, 'paying');
+    }
+    const now = new Date();
+
+    return this.prisma.$transaction(async (tx) => {
+      const updatedPayment = await tx.payment.update({
+        where: { id: paymentId },
+        data: {
+          status: 'paid',
+          paidAt: now,
+          providerTradeNo: dto.providerTradeNo,
+          rawPayload: {
+            mock: true,
+            providerTradeNo: dto.providerTradeNo ?? null,
+            markedPaidAt: now.toISOString(),
+          },
+        },
+      });
+
+      await this.ledger.createPaymentReceived(tx, {
+        restaurantId: order.restaurantId,
+        tableId: order.tableId,
+        orderId: order.id,
+        paymentId,
+        amount: payment.amount,
+        sourceId: paymentId,
+        note: `Online payment ${payment.method}`,
+        occurredAt: now,
+        metadata: {
+          orderNo: order.orderNo,
+          method: payment.method,
+          merchantTradeNo: payment.merchantTradeNo ?? null,
+          providerTradeNo: dto.providerTradeNo ?? null,
+        },
+      });
+
+      if (nextPaymentStatus === 'paid') {
+        await tx.diningTable.update({
+          where: { id: order.tableId },
+          data: { status: 'paying' },
+        });
+      }
+
+      const updatedOrder = await tx.order.update({
+        where: { id: order.id },
+        data: {
+          paymentStatus: nextPaymentStatus,
+          paidAt: nextPaymentStatus === 'paid' ? now : null,
+          events: {
+            create: {
+              eventType: 'payment.intent.paid',
+              operatorType: 'system',
+              amountDelta: payment.amount,
+              metadata: {
+                paymentId,
+                method: payment.method,
+                merchantTradeNo: payment.merchantTradeNo ?? null,
+                providerTradeNo: dto.providerTradeNo ?? null,
+              },
+            },
+          },
+          auditLogs: {
+            create: {
+              restaurantId: order.restaurantId,
+              tableId: order.tableId,
+              action: 'payment.intent.paid',
+              operatorType: 'system',
+              summary: `Online payment confirmed ${payment.amount}`,
+              metadata: {
+                paymentId,
+                method: payment.method,
+                merchantTradeNo: payment.merchantTradeNo ?? null,
+                providerTradeNo: dto.providerTradeNo ?? null,
+              },
+            },
+          },
+        },
+        include: { items: true, payments: true, table: true },
+      });
+
+      this.publishMany(['staff.tables.updated', 'admin.reports.updated']);
+      return updatedOrder ?? updatedPayment;
+    });
+  }
+
+  async closePaymentIntent(paymentId: string) {
+    const payment = await this.prisma.payment.findUnique({ where: { id: paymentId } });
+
+    if (!payment) {
+      throw new NotFoundException('Payment intent not found');
+    }
+
+    if (payment.channel !== 'online') {
+      throw new BadRequestException('Only online payment intents can be closed');
+    }
+
+    if (payment.status !== 'pending') {
+      throw new BadRequestException(`Payment intent cannot be closed from ${payment.status}`);
+    }
+
+    const updated = await this.prisma.$transaction((tx) =>
+      tx.payment.update({
+        where: { id: paymentId },
+        data: { status: 'closed' },
+      }),
+    );
+
+    this.publishMany(['staff.tables.updated']);
+    return updated;
+  }
+
+  async handleMockPaymentWebhook(dto: MockPaymentWebhookDto) {
+    const expectedSecret = process.env.MOCK_PAYMENT_WEBHOOK_SECRET ?? 'tablelink-mock-secret';
+    if (dto.secret !== expectedSecret) {
+      throw new BadRequestException('Invalid mock payment webhook secret');
+    }
+
+    return this.markPaymentIntentPaid(dto.paymentId, { providerTradeNo: dto.providerTradeNo });
+  }
+
+  async createAdjustment(orderId: string, dto: CreateOrderAdjustmentDto) {
+    const reason = dto.reason?.trim();
+    if (!reason) {
+      throw new BadRequestException('Adjustment reason is required');
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { payments: true, table: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (order.status === 'cancelled') {
+      throw new BadRequestException('Cannot adjust a cancelled order');
+    }
+
+    if (order.paymentStatus === 'paid') {
+      throw new BadRequestException('Cannot adjust a paid order');
+    }
+
+    const netPaidAmount = this.calculateNetPaidAmount(order.payments);
+    const isDecrease = this.isDecreaseAdjustment(dto.type);
+    const amountDelta = isDecrease ? -dto.amount : dto.amount;
+    const nextTotalAmount = order.totalAmount + amountDelta;
+
+    if (nextTotalAmount < 0) {
+      throw new BadRequestException('Adjustment exceeds order total');
+    }
+
+    if (nextTotalAmount < netPaidAmount) {
+      throw new BadRequestException('Adjustment would reduce total below paid amount');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const event = await tx.orderEvent.create({
+        data: {
+          orderId,
+          eventType: `order.adjustment.${dto.type}`,
+          amountDelta,
+          operatorType: 'staff',
+          reason,
+          metadata: {
+            adjustmentType: dto.type,
+            ledgerEntryType: isDecrease ? 'discount' : 'adjustment',
+          },
+        },
+      });
+
+      const updatedOrder = await tx.order.update({
+        where: { id: orderId },
+        data: isDecrease
+          ? {
+              discountAmount: { increment: dto.amount },
+              totalAmount: { increment: amountDelta },
+            }
+          : {
+              totalAmount: { increment: amountDelta },
+            },
+        include: { items: true, payments: true, table: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          restaurantId: order.restaurantId,
+          tableId: order.tableId,
+          orderId,
+          action: `order.adjustment.${dto.type}`,
+          operatorType: 'staff',
+          summary: `${isDecrease ? 'Discount' : 'Adjustment'} ${dto.amount}`,
+          metadata: {
+            adjustmentType: dto.type,
+            amount: dto.amount,
+            amountDelta,
+            reason,
+          },
+        },
+      });
+
+      const ledgerInput = {
+        restaurantId: order.restaurantId,
+        tableId: order.tableId,
+        orderId,
+        amount: dto.amount,
+        sourceId: event.id,
+        note: reason,
+        metadata: {
+          orderNo: order.orderNo,
+          tableName: order.table.name,
+          adjustmentType: dto.type,
+          amountDelta,
+        },
+      };
+
+      if (isDecrease) {
+        await this.ledger.createDiscount(tx, ledgerInput);
+      } else {
+        await this.ledger.createAdjustment(tx, ledgerInput);
+      }
+
+      this.publishMany(['staff.tables.updated', 'admin.reports.updated']);
+      return updatedOrder;
+    });
+  }
+
+  async reopenOrder(orderId: string, dto: ReopenOrderDto) {
+    const reason = dto.reason?.trim();
+    if (!reason) {
+      throw new BadRequestException('Reopen reason is required');
+    }
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { payments: true, table: true },
+    });
+
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+
+    if (order.status === 'cancelled') {
+      throw new BadRequestException('Cannot reopen a cancelled order');
+    }
+
+    if (order.paymentStatus !== 'paid') {
+      throw new BadRequestException('Only paid orders can be reopened');
+    }
+
+    const netPaidAmount = this.calculateNetPaidAmount(order.payments);
+    this.stateMachine.assertPaymentTransition(order.paymentStatus, 'partially_paid');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.orderEvent.create({
+        data: {
+          orderId,
+          eventType: 'payment.reopened',
+          operatorType: 'staff',
+          reason,
+          metadata: {
+            previousPaymentStatus: order.paymentStatus,
+            netPaidAmount,
+            totalAmount: order.totalAmount,
+            reason,
+          },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          restaurantId: order.restaurantId,
+          tableId: order.tableId,
+          orderId,
+          action: 'order.reopened',
+          operatorType: 'staff',
+          summary: `Reopened paid order ${order.orderNo}`,
+          metadata: {
+            previousPaymentStatus: order.paymentStatus,
+            netPaidAmount,
+            totalAmount: order.totalAmount,
+            reason,
+          },
+        },
+      });
+
+      await tx.diningTable.update({
+        where: { id: order.tableId },
+        data: { status: 'paying' },
+      });
+
+      const updatedOrder = await tx.order.update({
+        where: { id: orderId },
+        data: { paymentStatus: 'partially_paid', paidAt: null },
+        include: { items: true, payments: true, table: true },
+      });
+
+      this.publishMany(['staff.tables.updated', 'admin.reports.updated']);
+      return updatedOrder;
     });
   }
 
@@ -424,7 +883,7 @@ export class OrdersService {
               restaurantId: item.order.restaurantId,
               tableId: item.order.tableId,
               orderItemId,
-              jobType: 'kitchen_refund_item',
+              jobType: PRINT_JOB_TYPES.kitchenRefundItem,
               title: `退菜 ${item.order.table.name}`,
               payload: {
                 orderNo: item.order.orderNo,
@@ -453,6 +912,7 @@ export class OrdersService {
         },
       });
 
+      this.publishMany(['staff.tables.updated', 'kitchen.updated', 'admin.reports.updated', 'print.updated']);
       return updatedItem;
     });
   }
@@ -496,7 +956,7 @@ export class OrdersService {
           tableId: item.order.tableId,
           orderId,
           orderItemId,
-          jobType: 'kitchen_urge',
+          jobType: PRINT_JOB_TYPES.kitchenUrge,
           title: `催菜 ${item.order.table.name}`,
           payload: {
             orderNo: item.order.orderNo,
@@ -508,6 +968,7 @@ export class OrdersService {
         },
       });
 
+      this.realtime.publish({ type: 'print.updated' });
       return item;
     });
   }
@@ -566,7 +1027,7 @@ export class OrdersService {
           tableId: item.order.tableId,
           orderId,
           orderItemId,
-          jobType: dto.hold ? 'kitchen_hold' : 'kitchen_resume',
+          jobType: dto.hold ? PRINT_JOB_TYPES.kitchenHold : PRINT_JOB_TYPES.kitchenResume,
           title: `${dto.hold ? '等叫' : '恢复'} ${item.order.table.name}`,
           payload: {
             orderNo: item.order.orderNo,
@@ -578,6 +1039,7 @@ export class OrdersService {
         },
       });
 
+      this.realtime.publish({ type: 'print.updated' });
       return updatedItem;
     });
   }
@@ -627,7 +1089,7 @@ export class OrdersService {
         },
       });
 
-      return tx.order.update({
+      const updatedOrder = await tx.order.update({
         where: { id: orderId },
         data: {
           paymentStatus: nextPaymentStatus,
@@ -655,7 +1117,7 @@ export class OrdersService {
             create: {
               restaurantId: order.restaurantId,
               tableId: order.tableId,
-              jobType: 'receipt_refund',
+              jobType: PRINT_JOB_TYPES.receiptRefund,
               title: `退款 ${order.orderNo}`,
               payload: {
                 orderNo: order.orderNo,
@@ -669,6 +1131,9 @@ export class OrdersService {
         },
         include: { items: true, payments: true, table: true },
       });
+
+      this.publishMany(['staff.tables.updated', 'admin.reports.updated', 'print.updated']);
+      return updatedOrder;
     });
   }
 
@@ -688,24 +1153,46 @@ export class OrdersService {
     });
   }
 
-  private resolveOptions(menuOptions: { name: string; values: Prisma.JsonValue }[], selected: { optionName: string; valueName: string }[]) {
-    return selected.map((selection) => {
-      const option = menuOptions.find((menuOption) => menuOption.name === selection.optionName);
-      const values = Array.isArray(option?.values) ? option.values : [];
-      const value = values.find((entry): entry is { name: string; priceDelta?: number } => {
-        return typeof entry === 'object' && entry !== null && 'name' in entry && entry.name === selection.valueName;
-      });
+  private resolveOptions(
+    menuOptions: { name: string; type: 'single' | 'multiple'; required: boolean; values: Prisma.JsonValue }[],
+    selected: { optionName: string; valueName: string }[] = [],
+  ) {
+    const normalizedSelections = selected ?? [];
+    const resolved: { optionName: string; valueName: string; priceDelta: number }[] = [];
 
-      if (!option || !value) {
-        throw new BadRequestException(`Invalid option: ${selection.optionName}/${selection.valueName}`);
+    for (const option of menuOptions) {
+      const optionValues = normalizeMenuOptionValues(option.values);
+      const selections = normalizedSelections.filter((selection) => selection.optionName === option.name);
+
+      if (option.required && selections.length === 0) {
+        throw new BadRequestException(`Option ${option.name} is required`);
       }
 
-      return {
-        optionName: selection.optionName,
-        valueName: selection.valueName,
-        priceDelta: Number(value.priceDelta ?? 0),
-      };
-    });
+      if (option.type === 'single' && selections.length > 1) {
+        throw new BadRequestException(`Option ${option.name} allows only one value`);
+      }
+
+      for (const selection of selections) {
+        const value = optionValues.find((candidate) => candidate.name === selection.valueName);
+        if (!value) {
+          throw new BadRequestException(`Invalid option: ${selection.optionName}/${selection.valueName}`);
+        }
+
+        resolved.push({
+          optionName: option.name,
+          valueName: value.name,
+          priceDelta: value.priceDelta,
+        });
+      }
+    }
+
+    const knownOptionNames = new Set(menuOptions.map((option) => option.name));
+    const unknownSelection = normalizedSelections.find((selection) => !knownOptionNames.has(selection.optionName));
+    if (unknownSelection) {
+      throw new BadRequestException(`Invalid option: ${unknownSelection.optionName}/${unknownSelection.valueName}`);
+    }
+
+    return resolved;
   }
 
   private createOrderNo() {
@@ -715,9 +1202,50 @@ export class OrdersService {
     return `${ymd}-${suffix}`;
   }
 
+  private createCustomerAccessToken() {
+    return randomBytes(32).toString('base64url');
+  }
+
+  private createMerchantTradeNo(orderNo: string) {
+    return `MOCK-${orderNo}-${randomBytes(6).toString('hex').toUpperCase()}`;
+  }
+
+  private toPaymentIntentResponse(payment: { id: string; status: string; method: string; amount: number; merchantTradeNo?: string | null }) {
+    return {
+      paymentId: payment.id,
+      status: payment.status,
+      method: payment.method,
+      amount: payment.amount,
+      merchantTradeNo: payment.merchantTradeNo ?? null,
+      mockQrCodeUrl: null,
+    };
+  }
+
+  private safeEqualCustomerAccessToken(token: string, hash: string) {
+    const actual = Buffer.from(this.hashCustomerAccessToken(token));
+    const expected = Buffer.from(hash);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  }
+
+  private publishMany(types: ('kitchen.updated' | 'service.updated' | 'staff.tables.updated' | 'admin.reports.updated' | 'print.updated')[]) {
+    for (const type of types) {
+      this.realtime.publish({ type });
+    }
+  }
+
+  private isDecreaseAdjustment(type: OrderAdjustmentType) {
+    return type === 'discount' || type === 'rounding' || type === 'comp';
+  }
+
   private calculateNetPaidAmount(payments: { amount: number; status: string }[]) {
     const paidAmount = payments.filter((payment) => payment.status === 'paid').reduce((sum, payment) => sum + payment.amount, 0);
     const refundedAmount = payments.filter((payment) => payment.status === 'refunded').reduce((sum, payment) => sum + payment.amount, 0);
     return paidAmount - refundedAmount;
+  }
+
+  private calculateAvailablePaymentAmount(order: { totalAmount: number; payments: { amount: number; status: string; channel?: string }[] }) {
+    const netPaidAmount = this.calculateNetPaidAmount(order.payments);
+    const pendingOnlineAmount = order.payments.filter((payment) => payment.channel === 'online' && payment.status === 'pending').reduce((sum, payment) => sum + payment.amount, 0);
+    return order.totalAmount - netPaidAmount - pendingOnlineAmount;
   }
 }

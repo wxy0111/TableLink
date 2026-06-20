@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Query } from '@nestjs/common';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrdersService } from './orders.service';
 
@@ -12,8 +12,11 @@ export class PublicOrdersController {
   }
 
   @Get(':orderId')
-  findOne(@Param('orderId') orderId: string) {
-    return this.ordersService.findOne(orderId);
+  findOne(
+    @Param('orderId') orderId: string,
+    @Query('token') queryToken?: string,
+    @Headers('x-customer-order-token') headerToken?: string,
+  ) {
+    return this.ordersService.findPublicOne(orderId, queryToken ?? headerToken);
   }
 }
-

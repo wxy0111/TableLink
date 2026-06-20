@@ -396,6 +396,71 @@ textarea {
   gap: 8px;
 }
 
+.menu-status-panel {
+  margin-bottom: 14px;
+}
+
+.menu-status-list {
+  display: grid;
+  gap: 8px;
+}
+
+.menu-status-row {
+  align-items: center;
+  border-top: 1px solid #ece4d9;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  padding-top: 8px;
+}
+
+.amount-breakdown {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  margin-bottom: 10px;
+}
+
+.amount-breakdown span {
+  background: #f7f4ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+.adjustment-panel {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 120px 100px minmax(0, 1fr) auto;
+  margin-top: 10px;
+}
+
+.reopen-panel {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 10px;
+}
+
+.payment-intent-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.user-form,
+.user-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.user-list {
+  margin-top: 14px;
+}
+
 .notice-box {
   background: #e8f3ec;
   border: 1px solid #b7dbc4;
@@ -467,7 +532,7 @@ textarea {
 }
 
 .inline-form {
-  align-items: end;
+  align-items: flex-end;
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -587,6 +652,88 @@ textarea {
 
 .wide-card {
   grid-column: 1 / -1;
+}
+
+.ticket-print {
+  background: #fff;
+  color: #000;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.35;
+  margin: 0 auto;
+  max-width: 320px;
+  padding: 12px;
+}
+
+.ticket-print h1 {
+  font-size: 20px;
+  margin: 0 0 8px;
+  text-align: center;
+}
+
+.ticket-print p {
+  margin: 4px 0;
+}
+
+.ticket-print hr {
+  border: 0;
+  border-top: 1px dashed #000;
+  margin: 8px 0;
+}
+
+.option-group {
+  border: 1px solid #ded6c9;
+  border-radius: 8px;
+  margin: 8px 0 0;
+  padding: 8px;
+}
+
+.option-group legend {
+  color: #473f36;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.option-choice,
+.checkbox-row {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.order-option-panel,
+.option-admin-panel,
+.option-form {
+  display: grid;
+  gap: 8px;
+}
+
+.option-form textarea {
+  min-height: 96px;
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .shell,
+  .print-page,
+  .print-workspace,
+  .print-surface,
+  .ticket-print {
+    border: 0 !important;
+    box-shadow: none !important;
+    margin: 0;
+    max-width: none;
+    padding: 0;
+    width: 100%;
+  }
 }
 
 @media (max-width: 720px) {

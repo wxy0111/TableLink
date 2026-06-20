@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { PRINT_JOB_TYPES } from '../print/print-job-types';
+import { RealtimeService } from '../realtime/realtime.service';
 import { StateMachineService } from '../workflow/state-machine.service';
 import { ClearTableDto, MergeTablesDto, MoveTableDto, OpenTableDto } from './dto/frontdesk-table.dto';
 
@@ -8,6 +10,7 @@ export class TablesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stateMachine: StateMachineService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   async findByCode(code: string) {
@@ -28,7 +31,7 @@ export class TablesService {
       orderBy: { name: 'asc' },
       include: {
         orders: {
-          where: { paymentStatus: { not: 'paid' }, status: { not: 'cancelled' } },
+          where: { paymentStatus: { in: ['unpaid', 'partially_paid', 'paid'] }, status: { not: 'cancelled' } },
           orderBy: { createdAt: 'desc' },
           include: { items: true, payments: true },
         },
@@ -78,7 +81,7 @@ export class TablesService {
             create: {
               restaurantId: table.restaurantId,
               tableId,
-              jobType: 'frontdesk_open_table',
+              jobType: PRINT_JOB_TYPES.frontdeskOpenTable,
               title: `开台 ${table.name}`,
               payload: { tableName: table.name, orderNo, note: dto.note ?? null },
             },
@@ -92,6 +95,7 @@ export class TablesService {
         data: { status: 'occupied' },
       });
 
+      this.publishTablesChanged();
       return { table: updatedTable, order };
     });
   }
@@ -143,7 +147,7 @@ export class TablesService {
         data: {
           restaurantId: sourceTable.restaurantId,
           tableId: targetTable.id,
-          jobType: 'frontdesk_move_table',
+          jobType: PRINT_JOB_TYPES.frontdeskMoveTable,
           title: `换桌 ${sourceTable.name} -> ${targetTable.name}`,
           payload: { sourceTableName: sourceTable.name, targetTableName: targetTable.name, orderNos: activeOrders.map((order) => order.orderNo), reason: dto.reason ?? null },
         },
@@ -152,6 +156,7 @@ export class TablesService {
       await tx.diningTable.update({ where: { id: sourceTable.id }, data: { status: 'idle' } });
       const updatedTarget = await tx.diningTable.update({ where: { id: targetTable.id }, data: { status: 'dining' } });
 
+      this.publishTablesChanged();
       return { sourceTable: { ...sourceTable, status: 'idle' }, targetTable: updatedTarget, movedOrders: activeOrders.length };
     });
   }
@@ -203,7 +208,7 @@ export class TablesService {
         data: {
           restaurantId: sourceTable.restaurantId,
           tableId: targetTable.id,
-          jobType: 'frontdesk_merge_table',
+          jobType: PRINT_JOB_TYPES.frontdeskMergeTable,
           title: `并桌 ${sourceTable.name} -> ${targetTable.name}`,
           payload: { sourceTableName: sourceTable.name, targetTableName: targetTable.name, orderNos: activeOrders.map((order) => order.orderNo), reason: dto.reason ?? null },
         },
@@ -212,6 +217,7 @@ export class TablesService {
       await tx.diningTable.update({ where: { id: sourceTable.id }, data: { status: 'idle' } });
       const updatedTarget = await tx.diningTable.update({ where: { id: targetTable.id }, data: { status: 'dining' } });
 
+      this.publishTablesChanged();
       return { sourceTable: { ...sourceTable, status: 'idle' }, targetTable: updatedTarget, mergedOrders: activeOrders.length };
     });
   }
@@ -247,17 +253,26 @@ export class TablesService {
         data: {
           restaurantId: table.restaurantId,
           tableId,
-          jobType: 'frontdesk_clear_table',
+          jobType: PRINT_JOB_TYPES.frontdeskClearTable,
           title: `清台 ${table.name}`,
           payload: { tableName: table.name, reason: dto.reason ?? null },
         },
       });
 
-      return tx.diningTable.update({
+      const updatedTable = await tx.diningTable.update({
         where: { id: tableId },
         data: { status: 'idle' },
       });
+
+      this.publishTablesChanged();
+      return updatedTable;
     });
+  }
+
+  private publishTablesChanged() {
+    this.realtime.publish({ type: 'staff.tables.updated' });
+    this.realtime.publish({ type: 'admin.reports.updated' });
+    this.realtime.publish({ type: 'print.updated' });
   }
 
   private async findTable(tableId: string) {

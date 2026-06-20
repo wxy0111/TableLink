@@ -78,6 +78,14 @@ export class LedgerService {
     return this.createEntry(tx, { ...input, entryType: 'payment_refund' });
   }
 
+  createDiscount(tx: Tx, input: Omit<LedgerEntryInput, 'entryType'>) {
+    return this.createEntry(tx, { ...input, entryType: 'discount' });
+  }
+
+  createAdjustment(tx: Tx, input: Omit<LedgerEntryInput, 'entryType'>) {
+    return this.createEntry(tx, { ...input, entryType: 'adjustment' });
+  }
+
   async getTotals(range: Range) {
     const grouped = await this.prisma.ledgerEntry.groupBy({
       by: ['entryType'],
@@ -97,12 +105,16 @@ export class LedgerService {
     return {
       grossAmount: amount('item_sale'),
       voidAmount: amount('item_void'),
+      discountAmount: amount('discount'),
+      adjustmentAmount: amount('adjustment'),
       paidAmount: amount('payment_received'),
       refundAmount: amount('payment_refund'),
-      netSalesAmount: amount('item_sale') - amount('item_void'),
+      netSalesAmount: amount('item_sale') - amount('item_void') - amount('discount') + amount('adjustment'),
       netPaidAmount: amount('payment_received') - amount('payment_refund'),
       saleEntryCount: count('item_sale'),
       voidEntryCount: count('item_void'),
+      discountEntryCount: count('discount'),
+      adjustmentEntryCount: count('adjustment'),
       paymentEntryCount: count('payment_received'),
       refundEntryCount: count('payment_refund'),
     };

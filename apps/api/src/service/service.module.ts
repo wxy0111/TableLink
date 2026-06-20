@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { WorkflowModule } from '../workflow/workflow.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 import { PublicServiceCallsController } from './service.public.controller';
 import { ServiceController } from './service.controller';
 import { ServiceTasksService } from './service.service';
 
 @Module({
-  imports: [AuthModule, WorkflowModule],
+  imports: [AuthModule, WorkflowModule, RealtimeModule],
   controllers: [PublicServiceCallsController, ServiceController],
   providers: [ServiceTasksService],
 })

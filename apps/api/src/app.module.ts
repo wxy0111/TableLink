@@ -7,9 +7,12 @@ import { LedgerModule } from './ledger/ledger.module';
 import { MenuModule } from './menu/menu.module';
 import { OrdersModule } from './orders/orders.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { PrintModule } from './print/print.module';
 import { ReportsModule } from './reports/reports.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { ServiceModule } from './service/service.module';
 import { SetupModule } from './setup/setup.module';
+import { ShiftsModule } from './shifts/shifts.module';
 import { SystemModule } from './system/system.module';
 import { TablesModule } from './tables/tables.module';
 import { WorkflowModule } from './workflow/workflow.module';
@@ -17,6 +20,7 @@ import { WorkflowModule } from './workflow/workflow.module';
 @Module({
   imports: [
     PrismaModule,
+    PrintModule,
     AuthModule,
     LedgerModule,
     WorkflowModule,
@@ -26,9 +30,11 @@ import { WorkflowModule } from './workflow/workflow.module';
     KitchenModule,
     ServiceModule,
     ReportsModule,
+    RealtimeModule,
     SystemModule,
     AdminModule,
     SetupModule,
+    ShiftsModule,
     BackupsModule,
   ],
 })

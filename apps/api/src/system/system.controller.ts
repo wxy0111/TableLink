@@ -9,5 +9,9 @@ export class SystemController {
   getLocalAccess() {
     return this.systemService.getLocalAccess();
   }
-}
 
+  @Get('health')
+  getHealth() {
+    return this.systemService.getHealth();
+  }
+}

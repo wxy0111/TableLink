@@ -15,7 +15,7 @@ export class BackupsController {
   }
 
   @Post('restore')
-  restoreBackup(@Body() backup: unknown) {
-    return this.backupsService.restoreBackup(backup);
+  restoreBackup(@Body() request: unknown) {
+    return this.backupsService.restoreBackup(request);
   }
 }

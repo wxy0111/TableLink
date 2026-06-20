@@ -39,6 +39,20 @@ export function TablesManagerClient({ initialTables }: { initialTables: TableRec
     await refresh();
   }
 
+  async function regenerateCode(tableId: string) {
+    const response = await fetch(`/api/admin/tables/${tableId}/regenerate-code`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      setMessage('Regenerate table code failed');
+      return;
+    }
+
+    setMessage('Table code regenerated. Old QR code is now invalid.');
+    await refresh();
+  }
+
   return (
     <main className="shell">
       <header className="topbar">
@@ -70,10 +84,12 @@ export function TablesManagerClient({ initialTables }: { initialTables: TableRec
             <img src={table.qrDataUrl} alt={`${table.name} 二维码`} />
             <code>{table.tableUrl}</code>
             <p className="muted">Code: {table.code} / {table.capacity} 人桌</p>
+            <button className="secondary-button compact" type="button" onClick={() => regenerateCode(table.id)}>
+              Regenerate code
+            </button>
           </article>
         ))}
       </section>
     </main>
   );
 }
-

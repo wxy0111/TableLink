@@ -2,6 +2,7 @@
 
 import { Bell, Check, RefreshCcw, Utensils } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useRealtimeEvents } from '../use-realtime-events';
 
 type ServiceCall = {
   id: string;
@@ -39,6 +40,8 @@ export function ServiceTasksClient({ initialTasks }: { initialTasks: ServiceTask
     if (!response.ok) return;
     setTasks(await response.json());
   }
+
+  useRealtimeEvents(['service.updated'], refreshTasks);
 
   async function patch(path: string, success: string, id: string) {
     setBusyId(id);
@@ -152,4 +155,3 @@ export function ServiceTasksClient({ initialTasks }: { initialTasks: ServiceTask
     </main>
   );
 }
-

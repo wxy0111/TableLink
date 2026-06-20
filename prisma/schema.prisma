@@ -97,7 +97,13 @@ enum PaymentRecordStatus {
   pending
   paid
   failed
+  closed
   refunded
+}
+
+enum PaymentChannel {
+  manual
+  online
 }
 
 enum ServiceCallStatus {
@@ -123,10 +129,16 @@ enum LedgerEntryType {
   adjustment
 }
 
+enum ShiftStatus {
+  open
+  closed
+}
+
 model Restaurant {
   id        String           @id @default(cuid())
   name      String
   status    RestaurantStatus @default(active)
+  businessDayStartMinute Int  @default(0) @map("business_day_start_minute")
   createdAt DateTime         @default(now()) @map("created_at")
   updatedAt DateTime         @updatedAt @map("updated_at")
 
@@ -139,8 +151,31 @@ model Restaurant {
   auditLogs     AuditLog[]
   printJobs     PrintJob[]
   ledgerEntries LedgerEntry[]
+  shifts        Shift[]
 
   @@map("restaurants")
+}
+
+model Shift {
+  id                String      @id @default(cuid())
+  restaurantId      String      @map("restaurant_id")
+  openedByUserId    String?     @map("opened_by_user_id")
+  closedByUserId    String?     @map("closed_by_user_id")
+  openedAt          DateTime    @default(now()) @map("opened_at")
+  closedAt          DateTime?   @map("closed_at")
+  openingCashAmount Int         @default(0) @map("opening_cash_amount")
+  closingCashAmount Int?        @map("closing_cash_amount")
+  note              String?
+  status            ShiftStatus @default(open)
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+  openedBy   User?      @relation("ShiftOpenedBy", fields: [openedByUserId], references: [id])
+  closedBy   User?      @relation("ShiftClosedBy", fields: [closedByUserId], references: [id])
+
+  @@index([restaurantId, status, openedAt])
+  @@map("shifts")
 }
 
 model DiningTable {
@@ -180,6 +215,8 @@ model User {
   orders              Order[]       @relation("OrderCreatedBy")
   events              OrderEvent[]
   handledServiceCalls ServiceCall[]
+  openedShifts        Shift[]       @relation("ShiftOpenedBy")
+  closedShifts        Shift[]       @relation("ShiftClosedBy")
 
   @@unique([restaurantId, phone])
   @@unique([restaurantId, email])
@@ -254,6 +291,7 @@ model Order {
   subtotalAmount  Int           @default(0) @map("subtotal_amount")
   discountAmount  Int           @default(0) @map("discount_amount")
   totalAmount     Int           @default(0) @map("total_amount")
+  customerAccessTokenHash String? @map("customer_access_token_hash")
   remark          String?
   createdByType   OperatorType  @default(customer) @map("created_by_type")
   createdByUserId String?       @map("created_by_user_id")
@@ -358,7 +396,12 @@ model Payment {
   orderId   String              @map("order_id")
   method    PaymentMethod
   amount    Int
+  channel   PaymentChannel      @default(manual)
   status    PaymentRecordStatus @default(pending)
+  providerTradeNo String?       @map("provider_trade_no")
+  merchantTradeNo String?       @unique @map("merchant_trade_no")
+  expiresAt DateTime?           @map("expires_at")
+  rawPayload Json?              @map("raw_payload")
   paidAt    DateTime?           @map("paid_at")
   createdAt DateTime            @default(now()) @map("created_at")
   updatedAt DateTime            @updatedAt @map("updated_at")

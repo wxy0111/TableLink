@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { CreateServiceCallDto } from './dto/create-service-call.dto';
 import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { StateMachineService } from '../workflow/state-machine.service';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class ServiceTasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stateMachine: StateMachineService,
+    private readonly realtime: RealtimeService,
   ) {}
 
   async getCurrentServiceCall(tableCode: string) {
@@ -54,7 +56,7 @@ export class ServiceTasksService {
       return existingCall;
     }
 
-    return this.prisma.serviceCall.create({
+    const call = await this.prisma.serviceCall.create({
       data: {
         restaurantId: table.restaurantId,
         tableId: table.id,
@@ -64,6 +66,9 @@ export class ServiceTasksService {
       },
       include: { table: true },
     });
+
+    this.realtime.publish({ type: 'service.updated' });
+    return call;
   }
 
   async getTasks() {
@@ -162,6 +167,8 @@ export class ServiceTasksService {
         });
       }
 
+      this.realtime.publish({ type: 'service.updated' });
+      this.realtime.publish({ type: 'staff.tables.updated' });
       return updatedItem;
     });
   }
@@ -172,7 +179,7 @@ export class ServiceTasksService {
       throw new NotFoundException('Service call not found');
     }
 
-    return this.prisma.serviceCall.update({
+    const updatedCall = await this.prisma.serviceCall.update({
       where: { id: serviceCallId },
       data: {
         status,
@@ -181,5 +188,9 @@ export class ServiceTasksService {
       },
       include: { table: true },
     });
+
+    this.realtime.publish({ type: 'service.updated' });
+    this.realtime.publish({ type: 'staff.tables.updated' });
+    return updatedCall;
   }
 }

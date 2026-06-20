@@ -1,16 +1,24 @@
 import { AuthRequired } from '../../auth-required';
 import { getAuthHeaders, hasAuthToken } from '../../auth-session';
+import { AdminRealtimeRefresh } from '../realtime-refresh';
 
 const apiBaseUrl = process.env.INTERNAL_API_BASE_URL ?? 'http://localhost:3001';
 
 type DailyClosing = {
   date: string;
+  businessDate?: string;
+  businessDayStart?: number;
+  from: string;
+  to: string;
   totals: {
     grossAmount: number;
+    itemSaleAmount: number;
     paidAmount: number;
     refundAmount: number;
     netPaidAmount: number;
     voidAmount: number;
+    discountAmount: number;
+    adjustmentAmount: number;
     unpaidAmount: number;
     orderCount: number;
     paidOrderCount: number;
@@ -22,8 +30,32 @@ type DailyClosing = {
   paymentMethods: { method: string; paidAmount: number; refundAmount: number }[];
   refundedItems: { id: string; orderNo: string; tableName: string; name: string; quantity: number; amount: number }[];
   unpaidOrders: { id: string; orderNo: string; tableName: string; totalAmount: number; remainingAmount: number; paymentStatus: string }[];
+  shift?: { id: string; status: string; openedAt: string; closedAt?: string | null; openingCashAmount: number; closingCashAmount?: number | null; note?: string | null } | null;
   auditLogs: { id: string; action: string; summary: string; tableName: string | null; orderNo: string | null; createdAt: string }[];
   printJobs: { id: string; jobType: string; status: string; title: string; tableName: string | null; orderNo: string | null; createdAt: string }[];
+};
+
+type DailyClosingCheck = {
+  canClose: boolean;
+  unpaidOrders: { id: string; orderNo: string; tableName: string; remainingAmount: number; paymentStatus: string }[];
+  openTables: { id: string; name: string; status: string }[];
+  openShift: { id: string; status: string; openedAt: string } | null;
+  pendingPrintJobCount: number;
+  failedPrintJobCount: number;
+};
+
+type ReportSummary = {
+  averageOrderAmount: number;
+  tableTurnoverRate: number;
+  paidOrderCount: number;
+  tableCount: number;
+  hourlySales: { hour: string; orderCount: number; salesAmount: number }[];
+  kitchenEfficiency: {
+    averageReadyMinutes: number;
+    averageServeMinutes: number;
+    overdueItemCount: number;
+    overdueThresholdMinutes: number;
+  };
 };
 
 function formatMoney(amount: number) {
@@ -34,20 +66,37 @@ function formatTime(value: string) {
   return new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
+function formatPercent(value: number) {
+  return `${(value * 100).toFixed(0)}%`;
+}
+
 async function getDailyClosing() {
   const response = await fetch(`${apiBaseUrl}/api/admin/reports/daily-closing`, { cache: 'no-store', headers: await getAuthHeaders() });
   if (!response.ok) return null;
   return (await response.json()) as DailyClosing;
 }
 
+async function getDailyClosingCheck() {
+  const response = await fetch(`${apiBaseUrl}/api/admin/reports/daily-closing/check`, { cache: 'no-store', headers: await getAuthHeaders() });
+  if (!response.ok) return null;
+  return (await response.json()) as DailyClosingCheck;
+}
+
+async function getSummary() {
+  const response = await fetch(`${apiBaseUrl}/api/admin/reports/summary?period=daily`, { cache: 'no-store', headers: await getAuthHeaders() });
+  if (!response.ok) return null;
+  return (await response.json()) as ReportSummary;
+}
+
 export default async function DailyClosingPage() {
   if (!(await hasAuthToken())) return <AuthRequired title="日结对账需要登录" />;
 
-  const closing = await getDailyClosing();
+  const [closing, closingCheck, summary] = await Promise.all([getDailyClosing(), getDailyClosingCheck(), getSummary()]);
   const totals = closing?.totals;
 
   return (
     <main className="shell">
+      <AdminRealtimeRefresh />
       <header className="topbar">
         <div>
           <div className="brand">日结对账</div>
@@ -60,10 +109,33 @@ export default async function DailyClosingPage() {
         </nav>
       </header>
 
+      {closing ? (
+        <section className="notice-box">
+          <strong>Business day {closing.businessDate ?? closing.date}</strong>
+          <p>
+            {formatTime(closing.from)} - {formatTime(closing.to)} / start minute {closing.businessDayStart ?? 0}
+          </p>
+        </section>
+      ) : null}
+
+      {closingCheck ? (
+        <section className="notice-box">
+          <strong>{closingCheck.canClose ? 'Daily closing check passed' : 'Daily closing blocked'}</strong>
+          <p>
+            Unpaid orders: {closingCheck.unpaidOrders.length} / Open tables: {closingCheck.openTables.length} / Open shift:{' '}
+            {closingCheck.openShift ? 'yes' : 'no'} / Failed print jobs: {closingCheck.failedPrintJobCount}
+          </p>
+        </section>
+      ) : null}
+
       <section className="metric-grid">
         <article className="metric-card">
           <span className="muted">营业额</span>
           <strong>{formatMoney(totals?.grossAmount ?? 0)}</strong>
+        </article>
+        <article className="metric-card">
+          <span className="muted">原价销售</span>
+          <strong>{formatMoney(totals?.itemSaleAmount ?? 0)}</strong>
         </article>
         <article className="metric-card">
           <span className="muted">实收</span>
@@ -78,16 +150,56 @@ export default async function DailyClosingPage() {
           <strong>{formatMoney(totals?.voidAmount ?? 0)}</strong>
         </article>
         <article className="metric-card">
+          <span className="muted">折扣/减免</span>
+          <strong>{formatMoney(totals?.discountAmount ?? 0)}</strong>
+        </article>
+        <article className="metric-card">
+          <span className="muted">服务费/调整</span>
+          <strong>{formatMoney(totals?.adjustmentAmount ?? 0)}</strong>
+        </article>
+        <article className="metric-card">
           <span className="muted">未结</span>
           <strong>{formatMoney(totals?.unpaidAmount ?? 0)}</strong>
         </article>
         <article className="metric-card">
           <span className="muted">打印异常</span>
-          <strong>{totals?.failedPrintJobCount ?? 0}</strong>
+          <strong>
+            <a href="/print">{totals?.failedPrintJobCount ?? 0}</a>
+          </strong>
+        </article>
+        <article className="metric-card">
+          <span className="muted">翻台率</span>
+          <strong>{formatPercent(summary?.tableTurnoverRate ?? 0)}</strong>
+        </article>
+        <article className="metric-card">
+          <span className="muted">客单价</span>
+          <strong>{formatMoney(summary?.averageOrderAmount ?? 0)}</strong>
         </article>
       </section>
 
       <section className="admin-grid">
+        <article className="card">
+          <h2>Shift</h2>
+          <div className="grid">
+            <div className="ticket-item">
+              <span>{closing?.shift ? formatTime(closing.shift.openedAt) : 'No shift'}</span>
+              <strong>{closing?.shift?.status ?? 'none'}</strong>
+            </div>
+          </div>
+        </article>
+
+        <article className="card">
+          <h2>Open tables</h2>
+          <div className="grid">
+            {(closingCheck?.openTables ?? []).map((table) => (
+              <div className="ticket-item" key={table.id}>
+                <span>{table.name}</span>
+                <strong>{table.status}</strong>
+              </div>
+            ))}
+          </div>
+        </article>
+
         <article className="card">
           <h2>支付方式</h2>
           <div className="grid">
@@ -99,6 +211,41 @@ export default async function DailyClosingPage() {
                 </strong>
               </div>
             ))}
+          </div>
+        </article>
+
+        <article className="card">
+          <h2>高峰时段</h2>
+          <div className="grid">
+            {(summary?.hourlySales ?? [])
+              .filter((item) => item.orderCount > 0)
+              .slice(0, 8)
+              .map((item) => (
+                <div className="ticket-item" key={item.hour}>
+                  <span>
+                    {item.hour} / {item.orderCount} 单
+                  </span>
+                  <strong>{formatMoney(item.salesAmount)}</strong>
+                </div>
+              ))}
+          </div>
+        </article>
+
+        <article className="card">
+          <h2>出餐效率</h2>
+          <div className="grid">
+            <div className="ticket-item">
+              <span>平均出餐</span>
+              <strong>{summary?.kitchenEfficiency.averageReadyMinutes ?? 0} 分钟</strong>
+            </div>
+            <div className="ticket-item">
+              <span>平均上菜</span>
+              <strong>{summary?.kitchenEfficiency.averageServeMinutes ?? 0} 分钟</strong>
+            </div>
+            <div className="ticket-item">
+              <span>超时菜品</span>
+              <strong>{summary?.kitchenEfficiency.overdueItemCount ?? 0}</strong>
+            </div>
           </div>
         </article>
 

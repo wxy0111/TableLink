@@ -2,14 +2,18 @@
 
 import { Banknote, Bell, CheckCircle2, Combine, LogIn, RefreshCcw, RotateCcw, Send, Split, Trash2, Utensils } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useRealtimeEvents } from '../use-realtime-events';
 
 type PaymentMethod = 'cash' | 'wechat' | 'alipay';
+type AdjustmentType = 'discount' | 'rounding' | 'comp' | 'service_charge';
 
 type StaffPayment = {
   id: string;
   method: PaymentMethod;
   amount: number;
   status: string;
+  channel?: 'manual' | 'online';
+  merchantTradeNo?: string | null;
 };
 
 type StaffOrderItem = {
@@ -23,6 +27,8 @@ type StaffOrderItem = {
 type StaffOrder = {
   id: string;
   orderNo: string;
+  subtotalAmount: number;
+  discountAmount: number;
   totalAmount: number;
   paymentStatus: string;
   items: StaffOrderItem[];
@@ -42,6 +48,25 @@ type MenuItem = {
   name: string;
   price: number;
   status: string;
+  options?: MenuOption[];
+};
+
+type MenuOptionValue = {
+  name: string;
+  priceDelta: number;
+};
+
+type MenuOption = {
+  id: string;
+  name: string;
+  type: 'single' | 'multiple';
+  required: boolean;
+  values: MenuOptionValue[];
+};
+
+type SelectedOption = {
+  optionName: string;
+  valueName: string;
 };
 
 function formatMoney(amount: number) {
@@ -75,8 +100,12 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
   const [busyId, setBusyId] = useState<string | null>(null);
   const [targetByTable, setTargetByTable] = useState<Record<string, string>>({});
   const [itemByOrder, setItemByOrder] = useState<Record<string, string>>({});
+  const [selectedOptionsByOrder, setSelectedOptionsByOrder] = useState<Record<string, Record<string, string[]>>>({});
+  const [menuItems, setMenuItems] = useState(initialMenuItems);
+  const [adjustmentByOrder, setAdjustmentByOrder] = useState<Record<string, { type: AdjustmentType; amount: number; reason: string }>>({});
+  const [reopenReasonByOrder, setReopenReasonByOrder] = useState<Record<string, string>>({});
 
-  const activeMenuItems = initialMenuItems.filter((item) => item.status === 'active');
+  const activeMenuItems = menuItems.filter((item) => item.status === 'active');
   const busyTables = useMemo(() => tables.filter((table) => table.orders.length > 0 || table.status !== 'idle').length, [tables]);
 
   async function refreshTables() {
@@ -85,13 +114,67 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
     setTables(await response.json());
   }
 
+  async function refreshMenuItems() {
+    const response = await fetch('/api/public/restaurants/seed-restaurant-xidao/menu', { cache: 'no-store' });
+    if (!response.ok) return;
+    const categories = await response.json();
+    setMenuItems(categories.flatMap((category: { menuItems: MenuItem[] }) => category.menuItems));
+  }
+
+  async function refreshDashboard() {
+    await Promise.all([refreshTables(), refreshMenuItems()]);
+  }
+
+  useRealtimeEvents(['staff.tables.updated', 'menu.updated'], refreshDashboard);
+
+  function getSelectedMenuItem(orderId: string) {
+    const menuItemId = itemByOrder[orderId] ?? activeMenuItems[0]?.id;
+    return activeMenuItems.find((item) => item.id === menuItemId) ?? null;
+  }
+
+  function getSelectedOptions(orderId: string, menuItem: MenuItem): SelectedOption[] {
+    const selected = selectedOptionsByOrder[orderId] ?? {};
+    return (menuItem.options ?? []).flatMap((option) => (selected[option.name] ?? []).map((valueName) => ({ optionName: option.name, valueName })));
+  }
+
+  function validateSelectedOptions(orderId: string, menuItem: MenuItem) {
+    const selected = selectedOptionsByOrder[orderId] ?? {};
+    for (const option of menuItem.options ?? []) {
+      const values = selected[option.name] ?? [];
+      if (option.required && values.length === 0) return `请选择${option.name}`;
+      if (option.type === 'single' && values.length > 1) return `${option.name}只能选一项`;
+    }
+    return '';
+  }
+
+  function setOptionSelection(orderId: string, option: MenuOption, valueName: string, checked: boolean) {
+    setSelectedOptionsByOrder((current) => {
+      const orderSelections = current[orderId] ?? {};
+      const currentValues = orderSelections[option.name] ?? [];
+      const nextValues =
+        option.type === 'single'
+          ? [valueName]
+          : checked
+            ? Array.from(new Set([...currentValues, valueName]))
+            : currentValues.filter((name) => name !== valueName);
+
+      return {
+        ...current,
+        [orderId]: {
+          ...orderSelections,
+          [option.name]: nextValues,
+        },
+      };
+    });
+  }
+
   async function run(label: string, action: () => Promise<void>) {
     setBusyId(label);
     setMessage('');
     try {
       await action();
       setMessage(`${label} 已完成`);
-      await refreshTables();
+      await refreshDashboard();
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : '操作失败');
     } finally {
@@ -152,9 +235,15 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
   }
 
   async function addItem(order: StaffOrder) {
-    const menuItemId = itemByOrder[order.id] ?? activeMenuItems[0]?.id;
-    if (!menuItemId) {
+    const menuItem = getSelectedMenuItem(order.id);
+    if (!menuItem) {
       setMessage('没有可加菜品');
+      return;
+    }
+
+    const optionError = validateSelectedOptions(order.id, menuItem);
+    if (optionError) {
+      setMessage(optionError);
       return;
     }
 
@@ -162,7 +251,17 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
       await request(`/api/staff/orders/${order.id}/items`, {
         method: 'POST',
         headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ menuItemId, quantity: 1, remark: '收银台加菜', options: [] }),
+        body: JSON.stringify({ menuItemId: menuItem.id, quantity: 1, remark: '收银台加菜', options: getSelectedOptions(order.id, menuItem) }),
+      });
+    });
+  }
+
+  async function updateMenuItemStatus(item: MenuItem, status: 'active' | 'sold_out') {
+    await run(`${item.name} ${status}`, async () => {
+      await request(`/api/staff/menu-items/${item.id}/status`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ status }),
       });
     });
   }
@@ -196,6 +295,38 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
     });
   }
 
+  async function createPaymentIntent(order: StaffOrder, method: Exclude<PaymentMethod, 'cash'>) {
+    const amount = Math.max(0, order.totalAmount - netPaid(order));
+    if (amount <= 0) {
+      setMessage('订单已无待收金额');
+      return;
+    }
+
+    await run(`${order.orderNo} ${paymentLabels[method]}支付单`, async () => {
+      await request(`/api/staff/orders/${order.id}/payment-intents`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ method, amount }),
+      });
+    });
+  }
+
+  async function markPaymentIntentPaid(payment: StaffPayment) {
+    await run(`${payment.method} 支付成功`, async () => {
+      await request(`/api/staff/payment-intents/${payment.id}/mark-paid`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ providerTradeNo: `mock-${Date.now()}` }),
+      });
+    });
+  }
+
+  async function closePaymentIntent(payment: StaffPayment) {
+    await run(`${payment.method} 关闭支付单`, async () => {
+      await request(`/api/staff/payment-intents/${payment.id}/close`, { method: 'POST' });
+    });
+  }
+
   async function refundPayment(order: StaffOrder) {
     const amount = Math.min(100, Math.max(0, netPaid(order)));
     if (amount <= 0) {
@@ -212,6 +343,40 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
     });
   }
 
+  async function adjustOrder(order: StaffOrder) {
+    const form = adjustmentByOrder[order.id] ?? { type: 'discount', amount: 0, reason: '' };
+    if (form.amount <= 0 || !form.reason.trim()) {
+      setMessage('请输入调整金额和原因');
+      return;
+    }
+
+    await run(`${order.orderNo} 金额调整`, async () => {
+      await request(`/api/staff/orders/${order.id}/adjustments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ type: form.type, amount: form.amount, reason: form.reason.trim() }),
+      });
+      setAdjustmentByOrder((current) => ({ ...current, [order.id]: { type: form.type, amount: 0, reason: '' } }));
+    });
+  }
+
+  async function reopenOrder(order: StaffOrder) {
+    const reason = reopenReasonByOrder[order.id]?.trim();
+    if (!reason) {
+      setMessage('请输入反结账原因');
+      return;
+    }
+
+    await run(`${order.orderNo} 反结账`, async () => {
+      await request(`/api/staff/orders/${order.id}/reopen`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ reason }),
+      });
+      setReopenReasonByOrder((current) => ({ ...current, [order.id]: '' }));
+    });
+  }
+
   return (
     <main className="shell">
       <header className="topbar">
@@ -221,13 +386,40 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
             营业桌台 {busyTables} 张，总桌台 {tables.length} 张
           </p>
         </div>
-        <button className="button" type="button" onClick={refreshTables}>
+        <button className="button" type="button" onClick={refreshDashboard}>
           <RefreshCcw size={16} />
           刷新
         </button>
       </header>
 
       {message ? <div className="notice-box">{message}</div> : null}
+
+      <section className="card menu-status-panel">
+        <div className="ticket-header">
+          <h2>菜品状态</h2>
+          <button className="button" type="button" disabled={Boolean(busyId)} onClick={refreshMenuItems}>
+            <RefreshCcw size={16} />
+            刷新菜品
+          </button>
+        </div>
+        <div className="menu-status-list">
+          {menuItems.map((item) => (
+            <div className="menu-status-row" key={item.id}>
+              <span>
+                <strong>{item.name}</strong>
+                <span className="muted"> {formatMoney(item.price)}</span>
+              </span>
+              <span className={item.status === 'sold_out' ? 'sold-out' : 'pill'}>{item.status === 'sold_out' ? '已沽清' : '可售'}</span>
+              <button className="button" type="button" disabled={Boolean(busyId) || item.status === 'sold_out'} onClick={() => updateMenuItemStatus(item, 'sold_out')}>
+                沽清
+              </button>
+              <button className="button" type="button" disabled={Boolean(busyId) || item.status === 'active'} onClick={() => updateMenuItemStatus(item, 'active')}>
+                恢复
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section className="grid menu-grid">
         {tables.map((table) => {
@@ -276,17 +468,30 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
               ) : (
                 table.orders.map((order) => {
                   const remaining = Math.max(0, order.totalAmount - netPaid(order));
+                  const adjustmentAmount = Math.max(0, order.totalAmount - order.subtotalAmount + order.discountAmount);
+                  const adjustmentForm = adjustmentByOrder[order.id] ?? { type: 'discount' as AdjustmentType, amount: 0, reason: '' };
+                  const pendingOnlinePayments = order.payments.filter((payment) => payment.channel === 'online' && payment.status === 'pending');
 
                   return (
                     <div className="order-panel" key={order.id}>
                       <p className="muted">订单：{order.orderNo}</p>
-                      <p>
-                        <strong>{formatMoney(order.totalAmount)}</strong>
-                        <span className="muted"> 待收 {formatMoney(remaining)}</span>
-                      </p>
+                      <div className="amount-breakdown">
+                        <span>小计 <strong>{formatMoney(order.subtotalAmount)}</strong></span>
+                        <span>减免 <strong>{formatMoney(order.discountAmount)}</strong></span>
+                        <span>调整 <strong>{formatMoney(adjustmentAmount)}</strong></span>
+                        <span>应收 <strong>{formatMoney(order.totalAmount)}</strong></span>
+                        <span>已收 <strong>{formatMoney(netPaid(order))}</strong></span>
+                        <span>待收 <strong>{formatMoney(remaining)}</strong></span>
+                      </div>
 
                       <div className="inline-form compact-form">
-                        <select value={itemByOrder[order.id] ?? activeMenuItems[0]?.id ?? ''} onChange={(event) => setItemByOrder((current) => ({ ...current, [order.id]: event.target.value }))}>
+                        <select
+                          value={itemByOrder[order.id] ?? activeMenuItems[0]?.id ?? ''}
+                          onChange={(event) => {
+                            setItemByOrder((current) => ({ ...current, [order.id]: event.target.value }));
+                            setSelectedOptionsByOrder((current) => ({ ...current, [order.id]: {} }));
+                          }}
+                        >
                           {activeMenuItems.map((item) => (
                             <option value={item.id} key={item.id}>
                               {item.name} {formatMoney(item.price)}
@@ -298,6 +503,43 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
                           加菜
                         </button>
                       </div>
+                      {(() => {
+                        const selectedMenuItem = getSelectedMenuItem(order.id);
+                        if (!selectedMenuItem?.options?.length) return null;
+                        const selected = selectedOptionsByOrder[order.id] ?? {};
+
+                        return (
+                          <div className="order-option-panel">
+                            {selectedMenuItem.options.map((option) => (
+                              <fieldset className="option-group" key={option.id}>
+                                <legend>
+                                  {option.name}
+                                  {option.required ? ' *' : ''}
+                                </legend>
+                                <div className="chip-list">
+                                  {option.values.map((value) => {
+                                    const checked = (selected[option.name] ?? []).includes(value.name);
+                                    return (
+                                      <label className="option-choice" key={value.name}>
+                                        <input
+                                          type={option.type === 'single' ? 'radio' : 'checkbox'}
+                                          name={`${order.id}-${option.id}`}
+                                          checked={checked}
+                                          onChange={(event) => setOptionSelection(order.id, option, value.name, event.target.checked)}
+                                        />
+                                        <span>
+                                          {value.name}
+                                          {value.priceDelta ? ` +${formatMoney(value.priceDelta)}` : ''}
+                                        </span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </fieldset>
+                            ))}
+                          </div>
+                        );
+                      })()}
 
                       <div className="item-list">
                         {order.items.map((item) => (
@@ -322,7 +564,68 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
                         ))}
                       </div>
 
+                      <div className="adjustment-panel">
+                        <select
+                          value={adjustmentForm.type}
+                          onChange={(event) =>
+                            setAdjustmentByOrder((current) => ({
+                              ...current,
+                              [order.id]: { ...adjustmentForm, type: event.target.value as AdjustmentType },
+                            }))
+                          }
+                        >
+                          <option value="discount">折扣</option>
+                          <option value="rounding">抹零</option>
+                          <option value="comp">赠菜/免单</option>
+                          <option value="service_charge">服务费</option>
+                        </select>
+                        <input
+                          type="number"
+                          min={0}
+                          value={adjustmentForm.amount || ''}
+                          placeholder="金额(分)"
+                          onChange={(event) =>
+                            setAdjustmentByOrder((current) => ({
+                              ...current,
+                              [order.id]: { ...adjustmentForm, amount: Number(event.target.value) },
+                            }))
+                          }
+                        />
+                        <input
+                          value={adjustmentForm.reason}
+                          placeholder="原因"
+                          onChange={(event) =>
+                            setAdjustmentByOrder((current) => ({
+                              ...current,
+                              [order.id]: { ...adjustmentForm, reason: event.target.value },
+                            }))
+                          }
+                        />
+                        <button className="button" type="button" disabled={Boolean(busyId) || order.paymentStatus === 'paid'} onClick={() => adjustOrder(order)}>
+                          调整
+                        </button>
+                      </div>
+
+                      {order.paymentStatus === 'paid' ? (
+                        <div className="reopen-panel">
+                          <input
+                            value={reopenReasonByOrder[order.id] ?? ''}
+                            placeholder="反结账原因"
+                            onChange={(event) => setReopenReasonByOrder((current) => ({ ...current, [order.id]: event.target.value }))}
+                          />
+                          <button className="button danger-button" type="button" disabled={Boolean(busyId)} onClick={() => reopenOrder(order)}>
+                            反结账
+                          </button>
+                        </div>
+                      ) : null}
+
                       <div className="payment-actions">
+                        <button className="button" type="button" disabled={Boolean(busyId) || remaining <= 0} onClick={() => createPaymentIntent(order, 'wechat')}>
+                          微信支付单
+                        </button>
+                        <button className="button" type="button" disabled={Boolean(busyId) || remaining <= 0} onClick={() => createPaymentIntent(order, 'alipay')}>
+                          支付宝支付单
+                        </button>
                         <button className="button" type="button" disabled={Boolean(busyId) || remaining <= 0} onClick={() => pay(order, 'wechat')}>
                           微信
                         </button>
@@ -337,6 +640,25 @@ export function StaffDashboardClient({ initialTables, initialMenuItems }: { init
                           退款
                         </button>
                       </div>
+
+                      {pendingOnlinePayments.length ? (
+                        <div className="payment-intent-list">
+                          {pendingOnlinePayments.map((payment) => (
+                            <div className="ticket-item" key={payment.id}>
+                              <span>
+                                {payment.method} {formatMoney(payment.amount)}
+                                <span className="muted"> {payment.merchantTradeNo ?? ''}</span>
+                              </span>
+                              <button className="button" type="button" disabled={Boolean(busyId)} onClick={() => markPaymentIntentPaid(payment)}>
+                                模拟成功
+                              </button>
+                              <button className="button danger-button" type="button" disabled={Boolean(busyId)} onClick={() => closePaymentIntent(payment)}>
+                                关闭
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })

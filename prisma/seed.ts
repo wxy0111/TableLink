@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { hashPin } from '../apps/api/src/auth/pin-hash';
 
 const prisma = new PrismaClient();
 
@@ -122,7 +123,7 @@ async function main() {
         create: seedUsers.map((user) => ({
           name: user.name,
           phone: user.phone,
-          passwordHash: `pin:${user.pin}`,
+          passwordHash: hashPin(user.pin),
           role: user.role,
         })),
       },
@@ -139,7 +140,7 @@ async function main() {
       },
       update: {
         name: user.name,
-        passwordHash: `pin:${user.pin}`,
+        passwordHash: hashPin(user.pin),
         role: user.role,
         status: 'active',
       },
@@ -147,7 +148,7 @@ async function main() {
         restaurantId: 'seed-restaurant-xidao',
         name: user.name,
         phone: user.phone,
-        passwordHash: `pin:${user.pin}`,
+        passwordHash: hashPin(user.pin),
         role: user.role,
       },
     });

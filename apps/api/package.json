@@ -6,7 +6,8 @@
     "build": "nest build",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint \"src/**/*.ts\""
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",
@@ -21,6 +22,7 @@
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@nestjs/cli": "^11.0.10",
     "@nestjs/schematics": "^11.0.7",
     "@nestjs/testing": "^11.1.6",
@@ -28,6 +30,8 @@
     "@types/node": "^24.5.2",
     "@types/qrcode": "^1.5.6",
     "eslint": "^9.36.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.61.1",
+    "vitest": "^4.1.9"
   }
 }

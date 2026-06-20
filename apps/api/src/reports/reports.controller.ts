@@ -18,4 +18,9 @@ export class ReportsController {
   getDailyClosing(@Query('date') date?: string) {
     return this.reportsService.getDailyClosing(date);
   }
+
+  @Get('daily-closing/check')
+  getDailyClosingCheck(@Query('date') date?: string) {
+    return this.reportsService.getDailyClosingCheck(date);
+  }
 }

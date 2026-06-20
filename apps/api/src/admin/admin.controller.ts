@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { AuthGuard } from '../auth/auth.guard';
+import { AuthGuard, AuthenticatedRequest } from '../auth/auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
@@ -8,7 +8,10 @@ import { Request } from 'express';
 import { AdminService } from './admin.service';
 import { UpsertCategoryDto } from './dto/category.dto';
 import { UpsertMenuItemDto } from './dto/menu-item.dto';
+import { UpdateMenuItemOptionDto, UpsertMenuItemOptionDto } from './dto/menu-item-option.dto';
+import { UpdateMenuItemStatusDto } from './dto/menu-item-status.dto';
 import { CreateTableDto } from './dto/table.dto';
+import { CreateUserDto, ResetUserPinDto, UpdateUserDto } from './dto/user.dto';
 
 @Controller('admin')
 @UseGuards(AuthGuard)
@@ -46,6 +49,31 @@ export class AdminController {
     return this.adminService.updateMenuItem(menuItemId, dto);
   }
 
+  @Patch('menu-items/:menuItemId/status')
+  updateMenuItemStatus(@Param('menuItemId') menuItemId: string, @Body() dto: UpdateMenuItemStatusDto) {
+    return this.adminService.updateMenuItemStatus(menuItemId, dto.status);
+  }
+
+  @Get('menu-items/:menuItemId/options')
+  findMenuItemOptions(@Req() request: AuthenticatedRequest, @Param('menuItemId') menuItemId: string) {
+    return this.adminService.findMenuItemOptions(request.user!, menuItemId);
+  }
+
+  @Post('menu-items/:menuItemId/options')
+  createMenuItemOption(@Req() request: AuthenticatedRequest, @Param('menuItemId') menuItemId: string, @Body() dto: UpsertMenuItemOptionDto) {
+    return this.adminService.createMenuItemOption(request.user!, menuItemId, dto);
+  }
+
+  @Patch('menu-item-options/:optionId')
+  updateMenuItemOption(@Req() request: AuthenticatedRequest, @Param('optionId') optionId: string, @Body() dto: UpdateMenuItemOptionDto) {
+    return this.adminService.updateMenuItemOption(request.user!, optionId, dto);
+  }
+
+  @Delete('menu-item-options/:optionId')
+  deleteMenuItemOption(@Req() request: AuthenticatedRequest, @Param('optionId') optionId: string) {
+    return this.adminService.deleteMenuItemOption(request.user!, optionId);
+  }
+
   @Post('menu-images')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -73,5 +101,52 @@ export class AdminController {
   @Post('tables')
   createTable(@Body() dto: CreateTableDto) {
     return this.adminService.createTable(dto);
+  }
+
+  @Post('tables/:tableId/regenerate-code')
+  regenerateTableCode(@Param('tableId') tableId: string) {
+    return this.adminService.regenerateTableCode(tableId);
+  }
+
+  @Get('users')
+  findUsers(@Req() request: AuthenticatedRequest) {
+    return this.adminService.findUsers(request.user!);
+  }
+
+  @Post('users')
+  createUser(@Req() request: AuthenticatedRequest, @Body() dto: CreateUserDto) {
+    return this.adminService.createUser(request.user!, dto);
+  }
+
+  @Patch('users/:userId')
+  updateUser(@Req() request: AuthenticatedRequest, @Param('userId') userId: string, @Body() dto: UpdateUserDto) {
+    return this.adminService.updateUser(request.user!, userId, dto);
+  }
+
+  @Post('users/:userId/reset-pin')
+  resetUserPin(@Req() request: AuthenticatedRequest, @Param('userId') userId: string, @Body() dto: ResetUserPinDto) {
+    return this.adminService.resetUserPin(request.user!, userId, dto);
+  }
+
+  @Post('users/:userId/deactivate')
+  deactivateUser(@Req() request: AuthenticatedRequest, @Param('userId') userId: string) {
+    return this.adminService.deactivateUser(request.user!, userId);
+  }
+
+  @Post('users/:userId/activate')
+  activateUser(@Req() request: AuthenticatedRequest, @Param('userId') userId: string) {
+    return this.adminService.activateUser(request.user!, userId);
+  }
+}
+
+@Controller('staff/menu-items')
+@UseGuards(AuthGuard)
+@Roles('owner', 'manager', 'cashier')
+export class StaffMenuItemsController {
+  constructor(private readonly adminService: AdminService) {}
+
+  @Patch(':menuItemId/status')
+  updateMenuItemStatus(@Param('menuItemId') menuItemId: string, @Body() dto: UpdateMenuItemStatusDto) {
+    return this.adminService.updateMenuItemStatus(menuItemId, dto.status);
   }
 }

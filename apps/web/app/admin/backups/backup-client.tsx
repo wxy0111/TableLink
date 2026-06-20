@@ -18,19 +18,25 @@ export function BackupClient() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `tablelink-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    const restaurantName = typeof backup.metadata?.restaurantName === 'string' ? backup.metadata.restaurantName : 'restaurant';
+    link.download = `tablelink-${slugify(restaurantName)}-${new Date().toISOString().replaceAll(':', '').slice(0, 19)}.backup.json`;
     link.click();
     URL.revokeObjectURL(url);
     setMessage('备份已导出');
   }
 
   async function restoreBackup(file: File) {
+    if (!window.confirm('Restore will overwrite operating data. Continue?')) {
+      setMessage('Restore cancelled');
+      return;
+    }
+
     const text = await file.text();
     const backup = JSON.parse(text);
     const response = await fetch('/api/admin/backups/restore', {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
-      body: JSON.stringify(backup),
+      body: JSON.stringify({ confirmRestore: true, backup }),
     });
 
     if (!response.ok) {
@@ -80,3 +86,10 @@ export function BackupClient() {
   );
 }
 
+function slugify(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-|-$/g, '') || 'restaurant';
+}

@@ -2,6 +2,7 @@
 
 import { Check, Flame, Play, RefreshCcw } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useRealtimeEvents } from '../use-realtime-events';
 
 type KitchenTask = {
   id: string;
@@ -37,6 +38,8 @@ export function KitchenTasksClient({ initialTasks }: { initialTasks: KitchenTask
     if (!response.ok) return;
     setTasks(await response.json());
   }
+
+  useRealtimeEvents(['kitchen.updated'], refreshTasks);
 
   async function updateItem(task: KitchenTask, action: 'start' | 'ready') {
     setBusyItemId(task.id);
@@ -125,4 +128,3 @@ export function KitchenTasksClient({ initialTasks }: { initialTasks: KitchenTask
     </main>
   );
 }
-

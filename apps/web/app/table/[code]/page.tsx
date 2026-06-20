@@ -26,7 +26,7 @@ export default async function TableMenuPage({ params }: { params: Promise<{ code
         <span className="pill">{table ? `${table.name} 桌` : '桌台未找到'}</span>
       </header>
 
-      {table ? <MenuOrderClient tableCode={code} categories={menu} /> : null}
+      {table ? <MenuOrderClient tableCode={code} restaurantId={table.restaurantId} categories={menu} /> : null}
     </main>
   );
 }

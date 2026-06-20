@@ -12,3 +12,5 @@ data/uploads/
 data/backups/
 apps/api/data/
 TableLink-store-trial-*/
+installer/out/
+installer/offline/third-party/*.exe
